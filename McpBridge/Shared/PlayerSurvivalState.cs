@@ -21,8 +21,12 @@ namespace Marooned.Shared
 
         [Key(7)] public bool IsAlive = true;
 
-        /// <summary>Clue cards the player has personally picked up / observed so far.</summary>
-        [Key(8)] public List<string> CollectedClueCardIds = new();
+        /// <summary>
+        /// Clue System v2 (a): instance ids ที่ผู้เล่นเก็บ/สังเกตไว้ (เดิมชื่อ
+        /// CollectedClueCardIds — rename เท่านั้น, MessagePack Key(8) คงเดิมเพื่อ
+        /// wire compatibility กับ session เก่า)
+        /// </summary>
+        [Key(8)] public List<string> CollectedClueInstanceIds = new();
 
         /// <summary>How many times the player has accused someone wrongly. Hitting the cap = loss.</summary>
         [Key(9)] public int WrongAccusations = 0;

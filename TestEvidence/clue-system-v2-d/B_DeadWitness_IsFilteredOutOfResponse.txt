@@ -1,0 +1,5 @@
+=== Clue System v2 (d) Test B — 07:11:22 ===
+npc_dead.IsAlive = false (victim was eliminated)
+witnesses after death filter: [npc_live, player_local] (npc_dead removed ⚠️)
+RESULT: PASS
+

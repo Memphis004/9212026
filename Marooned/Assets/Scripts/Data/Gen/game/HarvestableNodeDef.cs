@@ -24,6 +24,7 @@ public sealed partial class HarvestableNodeDef : Luban.BeanBase
         { if(!_buf["yieldCount"].IsNumber) { throw new SerializationException(); }  YieldCount = _buf["yieldCount"]; }
         { if(!_buf["durability"].IsNumber) { throw new SerializationException(); }  Durability = _buf["durability"]; }
         { if(!_buf["regrowTime"].IsNumber) { throw new SerializationException(); }  RegrowTime = _buf["regrowTime"]; }
+        { if(!_buf["isHuntingTarget"].IsBoolean) { throw new SerializationException(); }  IsHuntingTarget = _buf["isHuntingTarget"]; }
     }
 
     public static HarvestableNodeDef DeserializeHarvestableNodeDef(JSONNode _buf)
@@ -38,6 +39,7 @@ public sealed partial class HarvestableNodeDef : Luban.BeanBase
     public readonly int YieldCount;
     public readonly int Durability;
     public readonly int RegrowTime;
+    public readonly bool IsHuntingTarget;
    
     public const int __ID__ = 1430954108;
     public override int GetTypeId() => __ID__;
@@ -56,6 +58,7 @@ public sealed partial class HarvestableNodeDef : Luban.BeanBase
         + "yieldCount:" + YieldCount + ","
         + "durability:" + Durability + ","
         + "regrowTime:" + RegrowTime + ","
+        + "isHuntingTarget:" + IsHuntingTarget + ","
         + "}";
     }
 }

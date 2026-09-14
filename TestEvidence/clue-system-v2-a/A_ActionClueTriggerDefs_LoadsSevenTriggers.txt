@@ -1,0 +1,11 @@
+=== Clue System v2 (a) Test A — 07:11:22 ===
+ActionClueTriggerDefs.Count = 7
+trig_kill_blood: source=KillSabotage, clue=clue_blood_stain, weight=100
+trig_kill_scratch: source=KillSabotage, clue=clue_scratch_mark, weight=30
+trig_hunt_blood: source=Hunting, clue=clue_blood_stain, weight=25
+trig_hunt_scratch: source=Hunting, clue=clue_scratch_mark, weight=15
+trig_water_wet: source=IncidentalAction, clue=clue_wet_clothes, weight=20
+trig_water_mud: source=IncidentalAction, clue=clue_footprint_mud, weight=15
+trig_task_sabotage: source=TaskSabotage, clue=clue_torn_cloth, weight=40
+RESULT: PASS
+

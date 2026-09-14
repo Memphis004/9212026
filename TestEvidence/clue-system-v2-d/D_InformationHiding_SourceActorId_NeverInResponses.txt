@@ -1,0 +1,9 @@
+=== Clue System v2 (d) Test D — 07:11:22 ===
+type check: ClueBoardEntry → ไม่มี SourceActorId ✓
+type check: GraphNode → ไม่มี SourceActorId ✓
+type check: GraphEdge → ไม่มี SourceActorId ✓
+byte scan: get_clue_board (71B) → no source-actor leak ✓
+byte scan: get_clue_graph (147B) → no source-actor leak ✓
+scan sanity: witness npc_a พบใน payload (scan มีประสิทธิภาพจริง)
+RESULT: PASS
+

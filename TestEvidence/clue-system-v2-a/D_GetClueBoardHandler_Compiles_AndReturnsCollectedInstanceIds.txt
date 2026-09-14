@@ -1,0 +1,6 @@
+=== Clue System v2 (a) Test D — 07:11:22 (updated for (d) shape) ===
+empty board → 0 entr(ies) (shape ใหม่ (d): List<ClueBoardEntry>)
+dangling instance id → skipped gracefully
+entry: clue_inst_001 | คราบเลือด | Strong | beach | witnesses=[player_local]
+RESULT: PASS
+

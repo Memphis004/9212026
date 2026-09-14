@@ -1,15 +1,14 @@
-=== MoveValidation_RejectsUnknown_AndNotConnected — 13:56:51 ===
-[cancel] stopped at (1.65,0.82), keyboard moved +1.76 in 0.5s → PASS
+=== MoveValidation_RejectsUnknown_AndNotConnected — 07:43:07 ===
 [cancel_move] idle→not_moving; mid-walk cancel at (1.6,0.8) → move=superseded, zone=beach คงเดิม → PASS
 [C] WASD injected ระหว่าง auto-move → moved=3.51 in 1s (cap 4.7) → PASS
 [A] start pos=(0.00,0.00) target=(10.00,5.00) straight=11.18
     t=0.2s pos=(0.78,0.39) activity=Traveling auto=True facingRight=True
-    t=0.5s pos=(1.57,0.78) activity=Traveling auto=True facingRight=True
-    t=0.8s pos=(2.36,1.18) activity=Traveling auto=True facingRight=True
+    t=0.5s pos=(1.56,0.78) activity=Traveling auto=True facingRight=True
+    t=0.8s pos=(2.35,1.17) activity=Traveling auto=True facingRight=True
     t=1.0s pos=(3.14,1.57) activity=Traveling auto=True facingRight=True
-    t=1.3s pos=(3.93,1.96) activity=Traveling auto=True facingRight=True
-    t=1.5s pos=(4.71,2.36) activity=Traveling auto=True facingRight=True
-[A] traveled=11.08 straight=11.18 samples=13 → PASS
+    t=1.3s pos=(3.92,1.96) activity=Traveling auto=True facingRight=True
+    t=1.5s pos=(4.70,2.35) activity=Traveling auto=True facingRight=True
+[A] traveled=11.09 straight=11.18 samples=13 → PASS
 [B] mid=Traveling (เห็นใน samples), final Activity=Idle → PASS
 [D] PlayerLocationChangedMessage published → ChibiSpawnerView/BiomeScatterView reconciled → PASS
 [E] atlantis→unknown_location, deep_jungle@beach→not_connected (ไม่เริ่มเดิน) → PASS

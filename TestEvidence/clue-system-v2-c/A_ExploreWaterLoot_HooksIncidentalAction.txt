@@ -1,0 +1,7 @@
+=== Clue System v2 (c) Test A — 07:11:22 ===
+explore('beach') x100: water-related loot 54 ครั้ง
+clue เกิดจาก IncidentalAction: 34 (34.0% — expect ≈19% = P(water)·35% + P(อื่น)·10%·35%)
+  source IncidentalAction: 34
+defs ที่เกิดจริง: [clue_wet_clothes, clue_footprint_mud]
+RESULT: PASS
+

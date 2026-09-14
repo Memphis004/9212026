@@ -1,0 +1,6 @@
+=== Clue System v2 (b) Test E — 07:11:22 ===
+player-kill snapshot: witnesses=[npc_by_1,npc_a,npc_b] (no player_local)
+end-to-end clue_blood_stain: witnesses=[npc_by_1,npc_a,npc_b]
+end-to-end clue_blood_stain: witnesses=[]
+RESULT: PASS
+

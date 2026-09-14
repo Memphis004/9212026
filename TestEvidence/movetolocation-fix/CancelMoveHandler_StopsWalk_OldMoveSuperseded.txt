@@ -1,5 +1,4 @@
-=== CancelMoveHandler_StopsWalk_OldMoveSuperseded — 13:56:44 ===
-[cancel] stopped at (1.65,0.82), keyboard moved +1.76 in 0.5s → PASS
+=== CancelMoveHandler_StopsWalk_OldMoveSuperseded — 07:43:01 ===
 [cancel_move] idle→not_moving; mid-walk cancel at (1.6,0.8) → move=superseded, zone=beach คงเดิม → PASS
 
 RESULT: PASS

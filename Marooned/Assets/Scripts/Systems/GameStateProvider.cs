@@ -29,6 +29,11 @@ namespace Marooned.Systems
         /// <summary>API เดิม — เรียก GetPlayer() ไม่ใส่ param ได้ผลลัพธ์เดิม (ตัวละครผู้เล่นหลัก)</summary>
         public PlayerSurvivalState GetPlayer(string playerId = LocalPlayerId) => _players[playerId];
 
+        // Clue System v2 (a): central registry — clue instance ทุกอันที่เกิดในรอบนี้
+        // (เก็บกลางแบบ multiplayer-ready ไม่ผูกกับ player คนใด; ผู้เล่นแต่ละคนถือ
+        // เฉพาะ instance ids ที่ตัวเองเก็บผ่าน PlayerSurvivalState.CollectedClueInstanceIds)
+        public Dictionary<string, ClueInstance> AllClueInstances { get; } = new();
+
         /// <summary>Phase 4 (multiplayer-ready): ได้ player ตาม id โดยสร้างใหม่ให้ถ้ายังไม่มี</summary>
         public PlayerSurvivalState GetOrCreatePlayer(string playerId)
         {
@@ -60,6 +65,9 @@ namespace Marooned.Systems
         public Dictionary<string, ClueDef> ClueDefs { get; private set; } = new();
         public Dictionary<string, IllnessDef> IllnessDefs { get; private set; } = new();
         public Dictionary<string, WorldEventDef> WorldEventDefs { get; private set; } = new();
+
+        // Clue System v2 (a): ตาราง trigger การกระทำ → clue (ActionClueTriggerDef.csv)
+        public Dictionary<string, ActionClueTriggerDef> ActionClueTriggerDefs { get; private set; } = new();
 
         // ---- Lab C Phase 1 (Hybrid BiomeScatter) — typed defs จาก generated code ----
         public Dictionary<string, cfg.game.BiomeDef> BiomeDefs { get; private set; } = new();
@@ -101,6 +109,7 @@ namespace Marooned.Systems
             ClueDefs = LubanDefMappers.MapClues(tables.TbClueDef.DataMap);
             IllnessDefs = LubanDefMappers.MapIllnesses(tables.TbIllnessDef.DataMap);
             WorldEventDefs = LubanDefMappers.MapWorldEvents(tables.TbWorldEventDef.DataMap);
+            ActionClueTriggerDefs = LubanDefMappers.MapActionClueTriggers(tables.TbActionClueTriggerDef.DataMap);
 
             BiomeDefs = tables.TbBiomeDef.DataMap.ToDictionarySafe();
             HarvestableNodeDefs = tables.TbHarvestableNodeDef.DataMap.ToDictionarySafe();
@@ -114,7 +123,7 @@ namespace Marooned.Systems
             Debug.Log($"[LubanDataService] loaded {CardDefs.Count} cards, {LocationDefs.Count} locations, " +
                       $"{RecipeDefs.Count} recipes, {ClueDefs.Count} clues, {IllnessDefs.Count} illnesses, " +
                       $"{WorldEventDefs.Count} events, {BiomeDefs.Count} biomes, {HarvestableNodeDefs.Count} harvestable nodes, " +
-                      $"{_zoneConnectionsByPair.Count} zone connections");
+                      $"{_zoneConnectionsByPair.Count} zone connections, {ActionClueTriggerDefs.Count} action clue triggers");
         }
 
         /// <summary>

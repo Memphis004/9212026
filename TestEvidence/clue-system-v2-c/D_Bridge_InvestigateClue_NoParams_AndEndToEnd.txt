@@ -1,0 +1,6 @@
+=== Clue System v2 (c) Tests D+E (bridge) — 07:42:59 ===
+[D] tools/list: 'investigate_clue' schema="name":"investigate_clue","description":"Investigate the player\u0027s current location for clues (blood stains, footprints, wet clothes, etc). Takes no paramet…
+[D] schema มี locationId/location_id: False
+[E] tools/call investigate_clue (no args) ผ่าน bridge ↔ TCP: {"result":{"content":[{"type":"text","text":"Found a clue! (instance 96323ccb-82a4-41d4-a925-9b09b344cd62) -- added to your clue board."}]},"id":3,"jsonrpc":"2.0"}
+RESULT: PASS
+

@@ -1,5 +1,5 @@
-=== KillRipple_HearerInvestigates_InLiveScene — 13:57:04 ===
-[B] kill npc_01 @ beach -> observer npc_03 Curiosity=30 noise=beach
-[B] observer reached 'beach' in 6.0s (transition phase at end: Entering, Curiosity now 72)
+=== KillRipple_HearerInvestigates_InLiveScene — 05:35:24 ===
+[B] kill npc_01 @ beach -> observer npc_02 Curiosity=30 noise=beach
+[B] observer reached 'beach' in 6.1s (transition phase at end: Entering, Curiosity now 72)
 
 RESULT: PASS

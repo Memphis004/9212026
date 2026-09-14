@@ -1,0 +1,6 @@
+=== Clue System v2 (d) Test A — 07:11:22 ===
+board: 2 entries (จาก 3 collected ids, 1 dangling skipped)
+  inst_1 | คราบเลือด | Strong | beach | witnesses=[npc_a, npc_b, player_local]
+  inst_2 | clue_def_unknown |  | cave_entrance | witnesses=[player_local]
+RESULT: PASS
+

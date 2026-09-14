@@ -50,6 +50,7 @@ namespace Marooned.Systems
         private readonly CardInventorySystem _inventory;
         private readonly LubanDataService _data;
         private readonly IPublisher<NodeHarvestedMessage> _harvestPublisher;
+        private readonly ClueGenerationSystem _clueGeneration;
 
         /// <summary>โหมดเก็บเหมือน ItemPickupSystem: InteractKey (E/Space)</summary>
         public PickupMode Mode = PickupMode.InteractKey;
@@ -59,13 +60,14 @@ namespace Marooned.Systems
 
         public NodeHarvestSystem(PlayerInputService input, GameStateProvider stateProvider,
             CardInventorySystem inventory, LubanDataService data,
-            IPublisher<NodeHarvestedMessage> harvestPublisher)
+            IPublisher<NodeHarvestedMessage> harvestPublisher, ClueGenerationSystem clueGeneration)
         {
             _input = input;
             _stateProvider = stateProvider;
             _inventory = inventory;
             _data = data;
             _harvestPublisher = harvestPublisher;
+            _clueGeneration = clueGeneration;
         }
 
         /// <summary>เรียกทุกเฟรมจาก GameTickDriver — อ่าน interact key แล้วพยายาม harvest</summary>
@@ -186,6 +188,19 @@ namespace Marooned.Systems
             });
 
             Debug.Log($"[NodeHarvestSystem] harvested '{node.NodeId}' → +{def.YieldCount} {def.YieldItemId} (durability {node.RemainingDurability}, depleted={result.Depleted})");
+
+            // Clue System v2 (c): hunting hook — node ที่ mark isHuntingTarget=true ใน
+            // HarvestableNodeDef.csv (เช่น node_deer) ถือว่า "ล่าสัตว์" → roll clue
+            // กลุ่ม Hunting ตาม ActionClueTriggerDef.csv (trig_hunt_blood / trig_hunt_scratch)
+            // sourceActorId = player เสมอ (ผู้เก็บคือผู้เล่น — ตามกติกา witness จึงไม่
+            // เป็นพยาน clue ของตัวเอง)
+            if (def.IsHuntingTarget)
+            {
+                _clueGeneration.TryGenerate(ClueTriggerSource.Hunting,
+                    _stateProvider.GetPlayer().CurrentLocationId,
+                    sourceActorId: GameStateProvider.LocalPlayerId);
+            }
+
             return result;
         }
 

@@ -1,0 +1,6 @@
+=== Clue System v2 (c) Test C — 07:42:59 ===
+investigate @ deep_jungle (ไม่มี clue): Success=False reason=no_clue_at_location
+seed clue @ beach: [clue_blood_stain]
+investigate @ beach: Success=True found=6a66f863… reason=
+RESULT: PASS
+

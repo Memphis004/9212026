@@ -1,0 +1,6 @@
+=== Clue System v2 (b) Test D — 07:11:22 ===
+clue_blood_stain: witnesses=[npc_witness,player_local]
+kill-hook clue_blood_stain: witnesses=[npc_witness,player_local] (no killer)
+kill-hook clue_blood_stain: witnesses=[] (no killer)
+RESULT: PASS
+

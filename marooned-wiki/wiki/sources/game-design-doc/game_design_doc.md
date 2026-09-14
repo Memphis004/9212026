@@ -105,7 +105,14 @@
 - **กฎ "No Witness" ถูกบังคับใช้ทั้ง AI Killer และ Player (ผ่าน NpcDirectorSystem.TryEliminate ตัวกลาง)**
   - ผู้เล่นไม่สามารถฆ่า NPC ได้ ถ้ามีคนอื่นอยู่ใน location เดียวกัน
   - ระบบเช็คจากฟังก์ชันกลางเดียวกัน → ทั้ง AI Killer และ Player Killer ใช้กฎเดียวกัน
-- เมื่อมีการฆาตกรรม → เกิด **Clue Card** สุ่มติดที่ศพ/NPC ใกล้เคียง เช่น "คราบเลือด", "รอยขีดข่วน", "รอยเท้าเปื้อนโคลน" — การ์ดเหล่านี้เป็นข้อมูลให้ผู้เล่น (และ AI) ใช้ในการนิรนัยหาตัวคนร้าย
+- เมื่อมีการฆาตกรรม → เกิด **Clue** ติดโซนที่เกิดเหตุ (v2, ตัดสินใจแล้ว 2026-09-14):
+  clue เป็น **instance object** (`ClueInstance`) มี metadata ครบ — timestamp, แหล่งที่มา
+  (`ClueTriggerSource`: KillSabotage/TaskSabotage/IncidentalAction/Hunting), พยาน snapshot
+  (exclude ผู้ก่อเหตุ; player ไม่เป็นพยานตัวเอง) — เกิดผ่าน pipeline กลางเดียว
+  `ClueGenerationSystem.TryGenerate` แบบ **roll อิสระต่อ trigger ตาม weight**
+  (การฆ่า 1 ครั้ง = blood 100% + scratch 30% → ได้ 0/1/2 ชิ้น) จากตาราง
+  `ActionClueTriggerDef`; hooks: kill / explore (น้ำ/10%) / harvest สัตว์ /
+  task sabotage (รอระบบ) — สถาปัตยกรรม: [[clue-system-v2]]
 - Meeting Phase: ผู้เล่นเลือก "กล่าวหา" NPC หรือ "งดออกเสียง" — ถ้ากล่าวหาผิด เสีย trust/mood ทั้งกลุ่ม, ถ้าปล่อยฆาตกรไว้นานเกินไป จำนวน NPC ที่รอดลดลงเรื่อยๆ
 
 ### 2.4 Player-as-Killer (Design Pivot)
@@ -260,15 +267,33 @@ public class NpcState
     [Key(5)] public ChibiAppearance Avatar;    // ดูหัวข้อ 4.1 — chibi sprite-swap, ไม่ใช่ portrait เดิม
 }
 
-// Shared/ClueDef.cs
+// Shared/ClueDef.cs (v2: + ClueCategory)
 public class ClueDef
 {
     public string Id;
     public string DisplayName;       // "คราบเลือด", "รอยขีดข่วน"
     public ClueReliability Reliability; // Strong / Weak / RedHerring
+    public string ClueCategory;      // wet / blood / footprint / general (v2)
     public string LinkedNpcIdHint;   // ใช้ฝั่ง server logic เท่านั้น ไม่ส่งตรงให้ client/AI
 }
+
+// Shared/ClueInstance.cs (v2, 2026-09-14) — clue ที่เกิดจริง 1 ชิ้น = 1 instance
+[MessagePackObject]
+public class ClueInstance
+{
+    [Key(0)] public string InstanceId;
+    [Key(1)] public string DefId;
+    [Key(2)] public string LocationId;
+    [Key(3)] public float GameTimestamp;
+    [Key(4)] public ClueTriggerSource Source;  // KillSabotage/TaskSabotage/IncidentalAction/Hunting
+    [Key(5)] public string SourceActorId;      // ground truth — ห้าม expose
+    [Key(6)] public List<string> WitnessNpcIds; // snapshot — ground truth — ห้าม expose
+}
 ```
+
+**v2 addition:** เก็บ instance ทั้งหมดใน `GameStateProvider.AllClueInstances` (registry กลาง,
+multiplayer-ready); player เก็บเข้ามือผ่าน `investigate_clue` →
+`CollectedClueInstanceIds` (Key(8) คงเดิมจากเดิม CollectedClueCardIds — wire-compatible)
 
 **หลักการสำคัญ:** `LinkedNpcIdHint` และ ground-truth ของ `NpcRole.Killer`
 ต้อง **ไม่** หลุดออกไปใน MCP response ใดๆ ที่ AI query ได้ตรงๆ (ไม่งั้น AI
@@ -296,7 +321,9 @@ public class ClueDef
 | `await_next_event` | Request-Response (คงแบบเดิมจาก Lab 6) | รอ event ถัดไป (survival หรือ social) แบบไม่ block TCP | — |
 | `report_body` / `call_meeting` | Action | เริ่ม Meeting Phase หลังพบศพ/สงสัย | — |
 | `accuse_npc` | Action | โหวตกล่าวหาใน Meeting Phase | — |
-| `get_clue_board` | Query | รวมเบาะแสทั้งหมดที่ "เก็บสะสมมาแล้ว" ให้ AI ใช้นิรนัย | — |
+| `get_clue_board` | Query | รวมเบาะแสทั้งหมดที่ "เก็บสะสมมาแล้ว" ให้ AI ใช้นิรนัย — ⚠️ shape ใหม่ (2026-09-14): คืน `entries` ต่อ instance (`instance_id/display_name/reliability/location_id/witness_npc_ids` ที่ผ่าน filter แล้ว) | breaking change — สถาปัตยกรรม: [[clue-system-v2]] |
+| `get_clue_graph` | Query (ใหม่) | เบาะแสชุดเดียวกันเป็นกราฟ: nodes (clue/npc) + edges clue→witness (witnessed) — reasoning "ใครเห็นอะไร" | 2026-09-14 |
+| `investigate_clue` | Action (ใหม่) | สืบหา clue ในโซนปัจจุบัน — **ไม่มีพารามิเตอร์** (server บังคับใช้ตำแหน่งผู้เล่นเอง กันสำรวจข้ามโซน); VisibleToBystanders=true เจอทันที ไม่งั้น roll 50%; เจอ → เข้า clue board อัตโนมัติ | 2026-09-14 |
 
 ### 6.2 การ์ด Weapon และกฎ No Witness
 
@@ -316,6 +343,12 @@ public class ClueDef
 - Player-as-Killer ต้องไม่รู้ว่า NPC ตัวไหนเป็น Killer จริงๆ (เหมือน Among Us)
 - AI ต้อง infer จากพฤติกรรมพวกลมหา (observe, clue, alibi)
 - `GetVisibleNpcs` ยังคงเป็นทางเดียวที่ปลอดภัย — ไม่ expose `NpcRole`
+- **Clue System v2 (2026-09-14)** — information hiding ทำ 3 ชั้น:
+  1. `ClueGeneratedMessage` (broadcast) ไม่มี SourceActorId/WitnessNpcIds เลย
+  2. `get_clue_board`/`get_clue_graph` กรอง witness เฉพาะ `player_local || IsAlive`
+     (killer และ NPC ตายแล้วไม่มีวันโผล่) — ตรวจจริงด้วย byte-scan ของ response ที่ serialize
+  3. `investigate_clue` ไม่รับ locationId จาก caller — server ใช้ตำแหน่งผู้เล่นเท่านั้น
+     (กัน AI สำรวจข้ามโซน — ปัญหาเดิมของ ExplorationSystem)
 
 ---
 

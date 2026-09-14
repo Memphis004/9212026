@@ -23,9 +23,9 @@ tags:
 
 # MCP Tool Table
 
-ตาราง MCP tools ทั้งหมด — รวบรวมจากโค้ดจริงใน `McpBridge/Program.cs` (11 tools ที่
+ตาราง MCP tools ทั้งหมด — รวบรวมจากโค้ดจริงใน `McpBridge/Program.cs` (14 tools ที่
 implement แล้ว) เทียบกับแผนใน game_design_doc.md §6 สถานะฝั่ง Unity ดูรายละเอียดใน
-[[mcp-bridge]]
+[[mcp-bridge]] — ระบบ clue ทั้งหมดดู [[clue-system-v2]]
 
 ## ตารางหลัก
 
@@ -33,7 +33,8 @@ implement แล้ว) เทียบกับแผนใน game_design_doc.
 |-----------|----------|-------|--------|-------------|--------|
 | GetGameState | SurvivalQuery | - | PlayerSurvivalState (ข้อความสรุป) | ดึง stat, inventory, ตำแหน่ง, condition, จำนวนโหวตผิด | ✅ |
 | GetVisibleNpcs | SurvivalQuery | - | รายการ NpcObservableView | NPC ที่มองเห็นในโซนเดียวกัน (ไม่มี role จริง) | ✅ |
-| GetClueBoard | SurvivalQuery | - | รายการ clue id | เบาะแสที่ผู้เล่นเก็บสะสมไว้ | ⚠️ |
+| GetClueBoard | SurvivalQuery | - | entries: List<ClueBoardEntry> (instance_id/display_name/reliability/location_id/witness_npc_ids) | เบาะแสที่ผู้เล่นเก็บสะสม — ⚠️ breaking (2026-09-14): จาก flat clue id → entry ต่อ instance, witness ผ่าน filter (killer/ศพไม่โผล่) — สถาปัตยกรรม: [[clue-system-v2]] | ✅ |
+| GetClueGraph | SurvivalQuery | - | nodes (clue/npc) + edges (witnessed) | เบาะแสเดียวกันเป็นกราฟ: clue→witness ที่มีชีวิต — ใช้ reasoning "ใครเห็นอะไร" (2026-09-14) | ✅ |
 | ExploreLocation | SurvivalAction | locationId | success + รายการ card id ที่พบ | สำรวจ node — สุ่ม loot แบบ deplete | ⚠️ |
 | CraftCard | SurvivalAction | recipeId | success/failureReason + outputCardId | คราฟการ์ดตามสูตร | ⚠️ |
 | MoveToLocation | SurvivalAction | locationId | success/failureReason | ย้ายไป location ที่เชื่อมถึงเท่านั้น | ✅ |
@@ -42,6 +43,7 @@ implement แล้ว) เทียบกับแผนใน game_design_doc.
 | AwaitNextEvent | SurvivalAction | timeoutSeconds (default 30) | TimedOut / Group + EventId + DisplayText | รอ world event ถัดไป (Survival หรือ Social) | ⚠️ |
 | CallMeeting | Deduction | - | success + รายชื่อ NPC เข้าร่วม | เรียกประชุมฉุกเฉินเมื่อพบศพ/สงสัย | ⚠️ |
 | AccuseNpc | Deduction | targetNpcId | WasCorrect + GameOverWin/Loss + ResultText | กล่าวหา NPC เป็น Killer — ตัดสินชนะ/แพ้ | ✅ |
+| InvestigateClue | Deduction | **- (ไม่มีพารามิเตอร์)** | FoundInstanceId / failureReason (no_clue_at_location, investigation_failed) | สืบหา clue ในโซนปัจจุบัน — server บังคับใช้ตำแหน่งผู้เล่นเอง (กันสำรวจข้ามโซน); VisibleToBystanders=true เจอทันที ไม่งั้น roll 50%; เจอแล้วเพิ่มเข้า clue board อัตโนมัติ (2026-09-14) | ✅ |
 
 **สถานะ:** ✅ = ใช้งานได้ครบ • ⚠️ = ใช้ได้แต่ logic ฝั่ง Unity ยังเป็น placeholder • ❌ = ยังไม่มี
 
@@ -60,8 +62,18 @@ implement แล้ว) เทียบกับแผนใน game_design_doc.
   มีอะไรในมือ และใกล้แพ้จากโหวตผิดกี่ครั้ง ใช้ตัดสินใจว่าจะกิน/สำรวจ/หาน้ำก่อน
 - **GetVisibleNpcs** — ใช้เมื่ออยากรู้ว่า "ใครอยู่ด้วยตอนนี้" — ดู activity และ
   condition ที่มองเห็นได้ (เช่น คราบเลือด) เพื่ออนุมานความน่าสงสัย; ห้ามคาดหวัง role จริง
-- **GetClueBoard** — ทบทวนเบาะแสที่สะสมไว้ก่อนตัดสินใจกล่าวหา (ปัจจุบันตอบว่างเสมอ —
-  รอระบบเก็บ clue)
+- **GetClueBoard** — ทบทวนเบาะแสที่สะสมไว้ก่อนตัดสินใจกล่าวหา — ⚠️ **shape ใหม่**
+  (2026-09-14): คืน entry ต่อ clue instance พร้อม display_name/reliability/location_id และ
+  witness_npc_ids ที่ผ่าน filter แล้ว (killer และ NPC ตายแล้วไม่มีวันโผล่); เบาะแสได้จาก
+  investigate_clue + ถูก generate อัตโนมัติจากเหตุการณ์ (ฆ่า/สำรวจ/ล่า) — สถาปัตยกรรม:
+  [[clue-system-v2]]
+- **GetClueGraph** — ข้อมูลชุดเดียวกับ GetClueBoard ในรูปกราฟ: nodes = clue ที่เก็บแล้ว
+  (type=clue) + พยานที่มีชีวิต (type=npc), edges = clue→witness (relation=witnessed) —
+  เหมาะกับ reasoning เชิงสังคม "ใครเห็นอะไร ใครอยู่ใกล้เหตุ" (2026-09-14)
+- **InvestigateClue** — สืบหาเบาะแสในโซนที่ **ยืนอยู่ปัจจุบัน** (ห้ามส่ง location — tool
+  ไม่มีพารามิเตอร์เลย เพื่อกันการสำรวจข้ามโซน); โซนไม่มี clue = `no_clue_at_location`,
+  มีแต่ roll ไม่ติด = `investigation_failed` (ลองใหม่ได้); เจอแล้วเข้า clue board ทันที —
+  ใช้หลังย้ายไปโซนที่มีเหตุการณ์ (เช่น เห็นศพ/รอยเลือดจาก GetVisibleNpcs)
 - **ExploreLocation** — ใช้เมื่ออยู่ location แล้ว หรือต้องการทรัพยากร; ผลลัพธ์ว่างได้ถ้า
   node หมด (depleted) — ไม่ใช่ error
 - **CraftCard** — ใช้เมื่อมีวัตถุดิบครบตาม recipe (เช่น ปลาดิบ → ปลาย่าง); ถ้า fail จะบอก
@@ -116,6 +128,8 @@ AI เรียกผ่าน MCP client (stdio) — Bridge เป็น MCP se
 - `UseCard(cardId: "knife_basic", targetId: "npc_03")` — weapon (Phase 4)
 - `AwaitNextEvent(timeoutSeconds: 30)`
 - `AccuseNpc(targetNpcId: "npc_03")`
+- `GetClueBoard()` / `GetClueGraph()` — ไม่มี argument (shape ใหม่ 2026-09-14)
+- `InvestigateClue()` — ไม่มี argument (ใช้โซนปัจจุบันเสมอ)
 
 **ข้อควรรู้สำหรับ AI:**
 - ทุก tool คืนค่าเป็น **ข้อความภาษาคน** (ไม่ใช่ JSON ดิบ) — อ่านแล้วใช้ตัดสินใจได้ทันที

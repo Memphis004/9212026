@@ -1,0 +1,6 @@
+=== Clue System v2 (b) Test B — 07:11:22 ===
+kill (npc_killer → npc_victim @ beach) → 1 instance(s):
+  clue_blood_stain (Source=KillSabotage, ts=0.00, witnesses=[player_local])
+messages published: 1 (1:1 with instances)
+RESULT: PASS
+

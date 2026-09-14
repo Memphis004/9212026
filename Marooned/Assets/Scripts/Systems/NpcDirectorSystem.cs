@@ -44,11 +44,16 @@ namespace Marooned.Systems
         private readonly InnocentUtilityAI _innocentAI;
         private readonly KillerPlanner _killerPlanner;
 
+        // Clue System v2 (b): generation pipeline (inject จาก DI) — SpawnClues เดิม
+        // hardcode card ids แล้วถูกแทนด้วย ClueGenerationSystem.TryGenerate ทั้งหมด
+        private readonly ClueGenerationSystem _clueGeneration;
+
         public IReadOnlyDictionary<string, NpcState> Npcs => _npcs;
 
         public NpcDirectorSystem(LubanDataService dataService, IPublisher<NpcEliminatedMessage> eliminatedPublisher,
             IPublisher<NpcLocationChangedMessage> npcLocationPublisher,
-            InnocentUtilityAI innocentAI, KillerPlanner killerPlanner, UtilityContext aiContext)
+            InnocentUtilityAI innocentAI, KillerPlanner killerPlanner, UtilityContext aiContext,
+            ClueGenerationSystem clueGeneration = null)
         {
             _data = dataService;
             _locations = dataService.LocationDefs;
@@ -56,6 +61,7 @@ namespace Marooned.Systems
             _npcLocationPublisher = npcLocationPublisher;
             _innocentAI = innocentAI;
             _killerPlanner = killerPlanner;
+            _clueGeneration = clueGeneration;
 
             // กัน DI cycle (UtilityContext ไม่ resolve ระบบนี้ตอน build): ผูกตัวเองเข้า
             // context ที่นี่ — จุดเดียวของเกม AI อ่าน ctx.NpcDirector ตอน Tick เท่านั้น
@@ -209,15 +215,34 @@ namespace Marooned.Systems
             return (true, null);
         }
 
+        /// <summary>
+        /// Clue System v2 (b): spawn clues ผ่าน generation pipeline — kill หนึ่งครั้ง
+        /// roll อิสระต่อ trigger (KillSabotage: blood 100% + scratch 30%) จึงได้ 0/1/2
+        /// instances รายครั้ง ทุก instance ถูกเก็บใน GameStateProvider.AllClueInstances
+        /// + publish ClueGeneratedMessage โดย ClueGenerationSystem เอง
+        ///
+        /// Backward compat (DeductionSystem เดิม): instance ids ถูกผนวกเข้า
+        /// victim.AllConditionCardIds ต่อไป — FilterVisible จะไม่กรอง id ที่ไม่ใช่
+        /// illness ออก จึงโผล่ใน observables เหมือน clue-card เดิม
+        /// </summary>
         private List<string> SpawnClues(string killerEntityId, NpcState victim)
         {
-            // Simple v1: always drop one visible clue on the victim's location, and a
-            // weaker chance of a red herring clue somewhere else. Replace with
-            // ClueDef-driven weighted rolls once DataTables/ClueDef.csv is populated.
-            var clues = new List<string> { "clue_blood_stain" };
-            if (_rng.NextDouble() < 0.3) clues.Add("clue_scratch_mark");
-            victim.AllConditionCardIds.AddRange(clues);
-            return clues;
+            if (_clueGeneration == null)
+            {
+                UnityEngine.Debug.LogWarning("[NpcDirectorSystem] ClueGenerationSystem ไม่ถูก inject — ข้ามการ spawn clue (test shim?)");
+                return new List<string>();
+            }
+
+            var instances = _clueGeneration.TryGenerate(
+                ClueTriggerSource.KillSabotage,
+                victim.CurrentLocationId,
+                killerEntityId);
+
+            // เพิ่ม clue instance ids เข้า victim.AllConditionCardIds (สำหรับ DeductionSystem เดิม)
+            var instanceIds = instances.Select(c => c.InstanceId).ToList();
+            victim.AllConditionCardIds.AddRange(instanceIds);
+
+            return instanceIds;
         }
     }
 }

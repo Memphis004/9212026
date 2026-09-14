@@ -1,7 +1,8 @@
-﻿##var,id,displayName,spritePath,reliability,visibleToBystanders
-##type,string,string,string,string,bool
-##,clue id,display name,sprite path,reliability,visible to bystanders
-,clue_blood_stain,คราบเลือด,Sprites/Clues/blood_stain,Strong,true
-,clue_scratch_mark,รอยขีดข่วน,Sprites/Clues/scratch_mark,Weak,true
-,clue_footprint_mud,รอยเท้าเปื้อนโคลน,Sprites/Clues/footprint_mud,Weak,false
-,clue_torn_cloth,ผ้าขาดติดกิ่งไม้,Sprites/Clues/torn_cloth,RedHerring,true
+##var,id,displayName,spritePath,reliability,visibleToBystanders,clueCategory
+##type,string,string,string,string,bool,string
+##,clue id,display name,sprite path,reliability,visible to bystanders,category (wet/blood/footprint/general)
+,clue_blood_stain,คราบเลือด,Sprites/Clues/blood_stain,Strong,true,blood
+,clue_scratch_mark,รอยขีดข่วน,Sprites/Clues/scratch_mark,Weak,true,general
+,clue_footprint_mud,รอยเท้าเปื้อนโคลน,Sprites/Clues/footprint_mud,Weak,false,footprint
+,clue_torn_cloth,ผ้าขาดติดกิ่งไม้,Sprites/Clues/torn_cloth,RedHerring,true,general
+,clue_wet_clothes,เสื้อผ้าเปียก,Sprites/Clues/wet_clothes,Weak,false,wet

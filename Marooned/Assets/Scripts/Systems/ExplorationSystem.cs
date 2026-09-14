@@ -19,15 +19,18 @@ namespace Marooned.Systems
         private readonly CardInventorySystem _inventory;
         private readonly PlayerSurvivalState _player;
         private readonly IPublisher<PlayerLocationChangedMessage> _playerLocationPublisher;
+        private readonly ClueGenerationSystem _clueGeneration;
         private readonly Random _rng = new();
 
         public ExplorationSystem(LubanDataService dataService, CardInventorySystem inventory,
-            GameStateProvider stateProvider, IPublisher<PlayerLocationChangedMessage> playerLocationPublisher)
+            GameStateProvider stateProvider, IPublisher<PlayerLocationChangedMessage> playerLocationPublisher,
+            ClueGenerationSystem clueGeneration)
         {
             _locations = dataService.LocationDefs;
             _inventory = inventory;
             _player = stateProvider.GetPlayer();
             _playerLocationPublisher = playerLocationPublisher;
+            _clueGeneration = clueGeneration;
 
             foreach (var loc in _locations.Values)
                 _runtime[loc.Id] = new LocationRuntimeState { RemainingWeight = new Dictionary<string, int>(loc.LootTable) };
@@ -53,6 +56,14 @@ namespace Marooned.Systems
 
             runtime.RemainingWeight[picked] -= 1;
             _inventory.TryAdd(picked, 1);
+
+            // Clue System v2 (c): incidental hook — สำรวจแล้วเจอของ "สายน้ำ" (water_bottle,
+            // raw_fish ฯลฯ) หรือสุ่ม 10% ทั่วไป → อาจทิ้ง clue ตาม ActionClueTriggerDef.csv
+            // (trig_water_wet → clue_wet_clothes, trig_water_mud → clue_footprint_mud)
+            // หมายเหตุ: ไม่มี "water tag" ใน LocationDef จึงเดาจาก loot card id ที่ได้จริง
+            bool isWaterRelated = picked.Contains("water") || picked == "raw_fish";
+            if (isWaterRelated || _rng.Next(100) < 10)
+                _clueGeneration.TryGenerate(ClueTriggerSource.IncidentalAction, locationId);
 
             // Lab B: publish PlayerLocationChangedMessage เมื่อ Explore ย้ายผู้เล่น
             // (Visual layer เช่น ChibiSpawnerView subscribe แทนการ polling)

@@ -1,4 +1,4 @@
-=== DebugOverlay_HungerLive — 13:56:56 ===
+=== DebugOverlay_HungerLive — 07:43:13 ===
 [B] Hunger (โชว์บน overlay) 3 วิจริง: 10.0 -> 16.0 (expect ~+6 = NpcSurvivalSystem tick จริง, ไม่ใช่ overlay implement เอง)
 
 RESULT: PASS

@@ -18,6 +18,7 @@ public partial class Tables
     public game.TbLocationDef TbLocationDef {get; }
     public game.TbRecipeDef TbRecipeDef {get; }
     public game.TbClueDef TbClueDef {get; }
+    public game.TbActionClueTriggerDef TbActionClueTriggerDef {get; }
     public game.TbIllnessDef TbIllnessDef {get; }
     public game.TbWorldEventDef TbWorldEventDef {get; }
     public game.TbBiomeDef TbBiomeDef {get; }
@@ -30,6 +31,7 @@ public partial class Tables
         TbLocationDef = new game.TbLocationDef(loader("game_tblocationdef"));
         TbRecipeDef = new game.TbRecipeDef(loader("game_tbrecipedef"));
         TbClueDef = new game.TbClueDef(loader("game_tbcluedef"));
+        TbActionClueTriggerDef = new game.TbActionClueTriggerDef(loader("game_tbactioncluetriggerdef"));
         TbIllnessDef = new game.TbIllnessDef(loader("game_tbillnessdef"));
         TbWorldEventDef = new game.TbWorldEventDef(loader("game_tbworldeventdef"));
         TbBiomeDef = new game.TbBiomeDef(loader("game_tbbiomedef"));
@@ -44,6 +46,7 @@ public partial class Tables
         TbLocationDef.ResolveRef(this);
         TbRecipeDef.ResolveRef(this);
         TbClueDef.ResolveRef(this);
+        TbActionClueTriggerDef.ResolveRef(this);
         TbIllnessDef.ResolveRef(this);
         TbWorldEventDef.ResolveRef(this);
         TbBiomeDef.ResolveRef(this);

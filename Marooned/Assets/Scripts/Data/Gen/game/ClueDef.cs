@@ -22,6 +22,7 @@ public sealed partial class ClueDef : Luban.BeanBase
         { if(!_buf["spritePath"].IsString) { throw new SerializationException(); }  SpritePath = _buf["spritePath"]; }
         { if(!_buf["reliability"].IsString) { throw new SerializationException(); }  Reliability = _buf["reliability"]; }
         { if(!_buf["visibleToBystanders"].IsBoolean) { throw new SerializationException(); }  VisibleToBystanders = _buf["visibleToBystanders"]; }
+        { if(!_buf["clueCategory"].IsString) { throw new SerializationException(); }  ClueCategory = _buf["clueCategory"]; }
     }
 
     public static ClueDef DeserializeClueDef(JSONNode _buf)
@@ -34,6 +35,7 @@ public sealed partial class ClueDef : Luban.BeanBase
     public readonly string SpritePath;
     public readonly string Reliability;
     public readonly bool VisibleToBystanders;
+    public readonly string ClueCategory;
    
     public const int __ID__ = 1191764592;
     public override int GetTypeId() => __ID__;
@@ -50,6 +52,7 @@ public sealed partial class ClueDef : Luban.BeanBase
         + "spritePath:" + SpritePath + ","
         + "reliability:" + Reliability + ","
         + "visibleToBystanders:" + VisibleToBystanders + ","
+        + "clueCategory:" + ClueCategory + ","
         + "}";
     }
 }

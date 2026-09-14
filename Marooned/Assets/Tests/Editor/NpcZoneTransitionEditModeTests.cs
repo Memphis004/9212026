@@ -41,8 +41,11 @@ namespace Marooned.Tests.Editor
 
             var innocent = new InnocentUtilityAI(_ctx);
             var killer = new KillerPlanner(_ctx);
+            // Clue System v2 (b): generator ตัวจริง — TryEliminate ผ่าน pipeline ใหม่เสมอ
+            var clueGeneration = new ClueGenerationSystem(_data, new GameStateProvider(), _ctx,
+                new FakePublisher<ClueGeneratedMessage>());
             _director = new NpcDirectorSystem(_data, new FakePublisher<NpcEliminatedMessage>(),
-                _directorMessages, innocent, killer, _ctx);
+                _directorMessages, innocent, killer, _ctx, clueGeneration);
             _ctx.Bind(_director);
 
             _director.SetupRound(new[] { "npc_01", "npc_02" }, killerCount: 0); // innocent ทั้งคู่ — คุม role เองในเทสที่ต้องใช้

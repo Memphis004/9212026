@@ -1,0 +1,5 @@
+=== Clue System v2 (d) Test C — 07:11:22 ===
+graph JSON sample:
+[[["inst_1","clue","คราบเลือด"],["npc_a","npc","npc_a"],["npc_b","npc","npc_b"],["inst_2","clue","เสื้อผ้าเปียก"],["player_local","npc","player_local"]],[["inst_1","npc_a","witnessed"],["inst_1","npc_b","witnessed"],["inst_2","npc_b","witnessed"],["inst_2","player_local","witnessed"]]]
+RESULT: PASS
+

@@ -16,7 +16,16 @@ tags:
 # 📚 Marooned Wiki — สารบัญ
 
 > เอกสารทั้งหมดของโปรเจค Marooned (Card Survival × Social Deduction)
-อัปเดตล่าสุด: 2026-09-13 (UI TMP Migration: Legacy Text/TextMesh → TextMeshPro ทั้ง 6 ไฟล์
+อัปเดตล่าสุด: 2026-09-14 (Clue System v2 ครบ 4 ส่วน (a)–(d): clue เป็น instance object
+(ClueInstance MessagePack + registry กลาง AllClueInstances) + pipeline กลาง ClueGenerationSystem
+(roll อิสระต่อ trigger ตาม weight, พยาน exclude ผู้ก่อเหตุ + player ไม่เป็นพยานตัวเอง,
+publish ClueGeneratedMessage ไม่มี ground truth) + hooks ครบ kill/explore(น้ำ/10%)/hunt(isHuntingTarget)
++ MCP tool investigate_clue (ไม่มีพารามิเตอร์ — server-side location กันสำรวจข้ามโซน) +
+get_clue_board shape ใหม่เป็น ClueBoardEntry (⚠️ breaking — witness ผ่าน filter killer+IsAlive)
++ get_clue_graph (nodes/edges witnessed) — byte-scan ยืนยัน SourceActorId ไม่ leak,
+EditMode 32/32 + PlayMode ผ่านหมด, หลักฐาน TestEvidence/clue-system-v2-{a,b,c,d} —
+ดู [[clue-system-v2]] และ [[2026-09-14-clue-system-v2-instance-pipeline]])
+ก่อนหน้า 2026-09-13 (UI TMP Migration: Legacy Text/TextMesh → TextMeshPro ทั้ง 6 ไฟล์
 + ฟอนต์ไทย THSarabunPSK SDF (Dynamic) ผ่าน WorldItemSystem.LoadLabelFont จุดโหลดกลาง +
 CardSlot.prefab Text→TextMeshProUGUI + Canvas Scaler match 0.5 + เพิ่ม asmdef ref Unity.TextMeshPro —
 Play session ไม่มี font error, ยังรอ screenshot เทส A–F) + แก้ bug script-execute
@@ -79,7 +88,14 @@ Microsoft.CodeAnalysis.CSharp/System.* 8 dll ที่ LegacyMigration ปิด
   WorldItemSystem.LoadLabelFont จุดโหลดกลาง (null check + LogError, fallback ไม่ crash) +
   world-space label fontSize 4 (item/harvestable/zone trigger) + UI TMP_Text fontSize 22-28
   (CardSlot/CardHand feedback/ZoneHud) + CardSlot.prefab Text→TextMeshProUGUI ผ่าน MCP
-  prefab tools + Canvas Scaler 1920×1080 match 0.5 + asmdef ref Unity.TextMeshPro
+  prefab tools  + Canvas Scaler 1920×1080 match 0.5 + asmdef ref Unity.TextMeshPro
+- [[clue-system-v2]] — Clue System v2 (2026-09-14): clue เป็น instance object มี metadata
+  (timestamp/source/witnesses) — ClueGenerationSystem pipeline กลาง (roll อิสระต่อ trigger
+  weight-based, witness snapshot exclude ผู้ก่อเหตุ, publish ClueGeneratedMessage ไม่มี ground truth)
+  + hooks kill/explore/hunt (DI cycle-safe ผ่าน UtilityContext Bind pattern) +
+  ActionClueTriggerDef.csv 7 triggers + registry กลาง GameStateProvider.AllClueInstances +
+  investigate_clue (ไม่มี param, VisibleToBystanders→ทันที/50%) + get_clue_board ClueBoardEntry
+  (breaking, witness filter killer+IsAlive) + get_clue_graph (nodes/edges) + byte-scan info-hiding
 
 ## 📄 Code Snippets
 
@@ -167,6 +183,11 @@ Microsoft.CodeAnalysis.CSharp/System.* 8 dll ที่ LegacyMigration ปิด
 - [[chibi-avatar]] — ระบบ Chibi sprite-swap avatar
 
 ## 🐛 Bug Log
+- [[2026-09-14-test-runner-wedge-orphan-mcpbridge]] — PlayMode tests แขวน 360s / fail เป็นชุด
+  / McpBridge ค้าง orphan — รากเหตุ 4 ชั้น (proxy timeout ≠ run abort → request ทับเขียน error
+  log พิษ run ที่บินอยู่ → [Timeout] hard-abort ข้าม finally → orphan ถือ TCP slot) +
+  protocol ก่อนรันทุกครั้ง (kill orphan / editor idle / filter testClass / poll แทนยิงซ้ำ)
+  + บทเรียน SessionState ข้าม domain reload (2026-09-14)
 - [[2026-09-13-script-execute-roslyn-vtable]] — script-execute พังทั้งตัว
   (TypeLoadException "invalid vtable method slot 4") — รากเหตุ 3 ชั้น: Roslyn 4.8 (NuGet
   ของ gamedev-mcp) ทับ Roslyn 3.11 (com.unity.pipeline) + LegacyMigration ปิด import
@@ -188,6 +209,10 @@ Microsoft.CodeAnalysis.CSharp/System.* 8 dll ที่ LegacyMigration ปิด
 - [[2026-09-09-lab-c-phase1-hybrid-biome-scatter-node-harvest-zone-transition]] — Dev Log: Lab C Phase 1 – Hybrid Biome Scatter + Node Harvest + Zone Transition
 - [[2026-09-10-lab-c-phase2-npc-embodiment-ai-hook]] — Dev Log: Lab C Phase 2 – NPC Embodiment (data foundation, movement, visual sync, AI Hook InnocentUtilityAI/KillerPlanner) + runtime tests A–F ผ่านครบ + 2 bugs ที่เจอ/แก้
 - [[2026-09-11-devlog]] — Dev Log: Hybrid Transition Points (Visual/ Spatial Fix) • Living NPCs (Survival Tick + Motive Events + Stub Actions) • Debug Overlay
+- [[2026-09-14-clue-system-v2-instance-pipeline]] — Dev Log: Clue System v2 ครบ (a)–(d) —
+  instance model + generation pipeline + kill/incidental hooks + investigate_clue +
+  board/graph response layer (⚠️ breaking get_clue_board) — เทส A–F ทุกส่วนผ่าน +
+  บทเรียน infra (test runner wedge / orphan McpBridge / testClass filter) (2026-09-14)
 - [[npc-embodiment-movement]] — (architecture) Lab C Phase 2 Step 1-4 – NPC Embodiment + Basic AI Hook: data/movement/visual sync + InnocentUtilityAI/KillerPlanner (2026-09-10)
 
 ## 🗂️ โครงสร้าง Wiki

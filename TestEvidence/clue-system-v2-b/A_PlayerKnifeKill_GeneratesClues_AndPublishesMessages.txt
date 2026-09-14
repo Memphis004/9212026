@@ -1,0 +1,9 @@
+=== Clue System v2 (b) Test A — 07:49:44 ===
+  [message] clue_blood_stain @ cave_entrance (id=a0cb7cc9…)
+attempt 1: use_card(knife_basic → npc_01) = True 
+AllClueInstances: 0 → 1 (+1)
+  clue_blood_stain @ cave_entrance ts=0.29 witnesses=[] (player = killer → ห้ามมี player_local)
+victim.AllConditionCardIds=[a0cb7cc9-1359-4782-987f-fcdf9d138426]
+RESULT: PASS
+
+RESULT: PASS

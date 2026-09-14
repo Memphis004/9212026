@@ -1,0 +1,44 @@
+[
+  {
+    "id": "trig_kill_blood",
+    "triggerSource": "KillSabotage",
+    "clueDefId": "clue_blood_stain",
+    "weight": 100
+  },
+  {
+    "id": "trig_kill_scratch",
+    "triggerSource": "KillSabotage",
+    "clueDefId": "clue_scratch_mark",
+    "weight": 30
+  },
+  {
+    "id": "trig_hunt_blood",
+    "triggerSource": "Hunting",
+    "clueDefId": "clue_blood_stain",
+    "weight": 25
+  },
+  {
+    "id": "trig_hunt_scratch",
+    "triggerSource": "Hunting",
+    "clueDefId": "clue_scratch_mark",
+    "weight": 15
+  },
+  {
+    "id": "trig_water_wet",
+    "triggerSource": "IncidentalAction",
+    "clueDefId": "clue_wet_clothes",
+    "weight": 20
+  },
+  {
+    "id": "trig_water_mud",
+    "triggerSource": "IncidentalAction",
+    "clueDefId": "clue_footprint_mud",
+    "weight": 15
+  },
+  {
+    "id": "trig_task_sabotage",
+    "triggerSource": "TaskSabotage",
+    "clueDefId": "clue_torn_cloth",
+    "weight": 40
+  }
+]

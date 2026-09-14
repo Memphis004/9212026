@@ -4,27 +4,39 @@
     "displayName": "คราบเลือด",
     "spritePath": "Sprites/Clues/blood_stain",
     "reliability": "Strong",
-    "visibleToBystanders": true
+    "visibleToBystanders": true,
+    "clueCategory": "blood"
   },
   {
     "id": "clue_scratch_mark",
     "displayName": "รอยขีดข่วน",
     "spritePath": "Sprites/Clues/scratch_mark",
     "reliability": "Weak",
-    "visibleToBystanders": true
+    "visibleToBystanders": true,
+    "clueCategory": "general"
   },
   {
     "id": "clue_footprint_mud",
     "displayName": "รอยเท้าเปื้อนโคลน",
     "spritePath": "Sprites/Clues/footprint_mud",
     "reliability": "Weak",
-    "visibleToBystanders": false
+    "visibleToBystanders": false,
+    "clueCategory": "footprint"
   },
   {
     "id": "clue_torn_cloth",
     "displayName": "ผ้าขาดติดกิ่งไม้",
     "spritePath": "Sprites/Clues/torn_cloth",
     "reliability": "RedHerring",
-    "visibleToBystanders": true
+    "visibleToBystanders": true,
+    "clueCategory": "general"
+  },
+  {
+    "id": "clue_wet_clothes",
+    "displayName": "เสื้อผ้าเปียก",
+    "spritePath": "Sprites/Clues/wet_clothes",
+    "reliability": "Weak",
+    "visibleToBystanders": false,
+    "clueCategory": "wet"
   }
 ]

@@ -1,0 +1,11 @@
+=== Clue System v2 (b) Test C — 07:11:22 ===
+kill x200 (blood=100% + scratch=30%):
+  0 clues: 0 (0.0%) — P=0 (blood 100% ห้ามพลาด)
+  1 clue : 140 (70.0%) — blood-only, expect ≈70%
+  2 clues: 60 (30.0%) — blood+scratch, expect ≈30%
+TryGenerate(Hunting) x150 (blood=25% + scratch=15%):
+  0 clues: 97 (64.7%) — expect ≈63.75%
+  1 clue : 47 (31.3%) — expect ≈32.5%
+  2 clues: 6 (4.0%) — expect ≈3.75%
+RESULT: PASS
+

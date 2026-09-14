@@ -119,6 +119,32 @@ namespace Marooned.Systems
                     SpritePath = d.SpritePath,
                     Reliability = ParseEnum(d.Reliability, Marooned.Shared.ClueReliability.Strong),
                     VisibleToBystanders = d.VisibleToBystanders,
+                    // Clue System v2 (a): copy field ใหม่จาก generated def — ไม่งั้น
+                    // หายเงียบ ๆ ตอน map (Shared def จะคง default "" ตลอด)
+                    ClueCategory = d.ClueCategory,
+                };
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Clue System v2 (a) — ตาราง trigger การกระทำ → clue (ActionClueTriggerDef.csv)
+        /// pattern เดียวกับ MapCards: cfg.game.* (triggerSource เป็น string) →
+        /// Marooned.Shared.ActionClueTriggerDef (enum แท้ ClueTriggerSource)
+        /// </summary>
+        public static Dictionary<string, Marooned.Shared.ActionClueTriggerDef> MapActionClueTriggers(
+            IReadOnlyDictionary<string, cfg.game.ActionClueTriggerDef> source)
+        {
+            var result = new Dictionary<string, Marooned.Shared.ActionClueTriggerDef>(source.Count);
+            foreach (var kv in source)
+            {
+                var d = kv.Value;
+                result[kv.Key] = new Marooned.Shared.ActionClueTriggerDef
+                {
+                    Id = d.Id,
+                    TriggerSource = ParseEnum(d.TriggerSource, Marooned.Shared.ClueTriggerSource.IncidentalAction),
+                    ClueDefId = d.ClueDefId,
+                    Weight = d.Weight,
                 };
             }
             return result;

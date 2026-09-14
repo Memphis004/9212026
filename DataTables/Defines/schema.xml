@@ -69,14 +69,27 @@
     <table name="TbRecipeDef" value="RecipeDef" mode="map" index="id" input="RecipeDef.csv" group="c"/>
 
     <!-- ============ ClueDef ============ -->
+    <!-- Clue System v2 (a): + clueCategory (หมวด clue, มาจาก CSV column clueCategory) -->
     <bean name="ClueDef">
         <var name="id" type="string"/>
         <var name="displayName" type="string"/>
         <var name="spritePath" type="string"/>
         <var name="reliability" type="string"/>
         <var name="visibleToBystanders" type="bool"/>
+        <var name="clueCategory" type="string"/>
     </bean>
     <table name="TbClueDef" value="ClueDef" mode="map" index="id" input="ClueDef.csv" group="c"/>
+
+    <!-- ============ ActionClueTriggerDef ============ -->
+    <!-- Clue System v2 (a): การกระทำแต่ละประเภทปล่อย clue อะไร (weight = ความน่าจะเป็น)
+         triggerSource ตรงกับ Marooned.Shared.ClueTriggerSource enum จะถูก map เป็น enum แท้ใน LubanDefMappers.MapActionClueTriggers -->
+    <bean name="ActionClueTriggerDef">
+        <var name="id" type="string"/>
+        <var name="triggerSource" type="string"/>
+        <var name="clueDefId" type="string"/>
+        <var name="weight" type="int"/>
+    </bean>
+    <table name="TbActionClueTriggerDef" value="ActionClueTriggerDef" mode="map" index="id" input="ActionClueTriggerDef.csv" group="c"/>
 
     <!-- ============ IllnessDef ============ -->
     <bean name="IllnessDef">
@@ -113,6 +126,8 @@
     <table name="TbBiomeDef" value="BiomeDef" mode="map" index="id" input="BiomeDef.csv" group="c"/>
 
     <!-- ============ HarvestableNodeDef ============ -->
+    <!-- Clue System v2 (c): + isHuntingTarget — node ที่เก็บแล้วถือว่า "ล่าสัตว์"
+         (node_deer) → NodeHarvestSystem hook ClueTriggerSource.Hunting -->
     <bean name="HarvestableNodeDef">
         <var name="id" type="string"/>
         <var name="displayName" type="string"/>
@@ -121,6 +136,7 @@
         <var name="yieldCount" type="int"/>
         <var name="durability" type="int"/>
         <var name="regrowTime" type="int"/>
+        <var name="isHuntingTarget" type="bool"/>
     </bean>
     <table name="TbHarvestableNodeDef" value="HarvestableNodeDef" mode="map" index="id" input="HarvestableNodeDef.csv" group="c"/>
 

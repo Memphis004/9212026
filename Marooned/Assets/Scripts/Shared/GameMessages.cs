@@ -98,16 +98,85 @@ namespace Marooned.Shared
     {
     }
 
+    /// <summary>
+    /// Clue System v2 (d): 1 แถวบน clue board — สร้างฝั่ง server จาก ClueInstance + ClueDef
+    /// ⚠️ Information Hiding: ไม่มี SourceActorId ที่นี่ (ground truth อยู่ใน ClueInstance เท่านั้น)
+    /// WitnessNpcIds = กรองแล้ว (exclude ผู้ก่อเหตุ/npc ตาย — กรองตอน build response)
+    /// </summary>
+    [MessagePackObject]
+    public class ClueBoardEntry
+    {
+        [Key(0)] public string InstanceId = string.Empty;
+        [Key(1)] public string DisplayName = string.Empty;
+        [Key(2)] public string Reliability = string.Empty;
+        [Key(3)] public string LocationId = string.Empty;
+        [Key(4)] public List<string> WitnessNpcIds = new();
+    }
+
+    /// <summary>
+    /// Clue System v2 (d): ⚠️ BREAKING — เปลี่ยนจาก List<string> CollectedClueCardIds
+    /// เป็น List<ClueBoardEntry> Entries (AI VTuber ต้อง adapt shape ใหม่)
+    /// </summary>
     [MessagePackObject]
     public class GetClueBoardResponse
     {
-        [Key(0)] public List<string> CollectedClueCardIds = new();
+        [Key(0)] public List<ClueBoardEntry> Entries = new();
+    }
+
+    // ---- Clue System v2 (d): get_clue_graph (graph view ของ board เดียวกัน) ----
+    [MessagePackObject]
+    public class GetClueGraphRequest
+    {
+    }
+
+    [MessagePackObject]
+    public class GraphNode
+    {
+        [Key(0)] public string Id = string.Empty;    // clue instance id หรือ witness id
+        [Key(1)] public string Type = string.Empty;  // "clue" | "npc"
+        [Key(2)] public string Label = string.Empty; // DisplayName ของ clue / id ของ witness
+    }
+
+    [MessagePackObject]
+    public class GraphEdge
+    {
+        [Key(0)] public string From = string.Empty;     // clue instance id
+        [Key(1)] public string To = string.Empty;       // witness id
+        [Key(2)] public string Relation = string.Empty; // "witnessed"
+    }
+
+    [MessagePackObject]
+    public class GetClueGraphResponse
+    {
+        [Key(0)] public List<GraphNode> Nodes = new();
+        [Key(1)] public List<GraphEdge> Edges = new();
     }
 
     [MessagePackObject]
     public class MoveToLocationRequest
     {
         [Key(0)] public string LocationId = string.Empty;
+    }
+
+    // ---- Clue System v2 (c): investigate_clue ----
+    // ⚠️ Security: empty request โดยตั้งใจ — ห้ามรับ LocationId จาก caller (AI อาจ
+    // สำรวจข้ามโซน บั๊กเดิมที่เคยแก้ใน ExplorationSystem) — handler บังคับใช้
+    // _stateProvider.GetPlayer().CurrentLocationId ฝั่ง server เสมอ
+    [MessagePackObject]
+    public class InvestigateClueRequest
+    {
+    }
+
+    [MessagePackObject]
+    public class InvestigateClueResponse
+    {
+        [Key(0)] public bool Success;
+
+        /// <summary>instance id ที่เจอ (ค่าว่างเมื่อไม่เจอ — โปรเจกต์ไม่ใช้ nullable)</summary>
+        [Key(1)] public string FoundInstanceId = string.Empty;
+
+        /// <summary>"no_clue_at_location" | "investigation_failed" (ค่าว่างเมื่อสำเร็จ)</summary>
+        [Key(2)] public string FailureReason = string.Empty;
     }
 
     [MessagePackObject]
@@ -184,6 +253,20 @@ namespace Marooned.Shared
         [Key(0)] public string VictimNpcId = string.Empty;
         [Key(1)] public string LocationId = string.Empty;
         [Key(2)] public List<string> SpawnedClueCardIds = new();
+    }
+
+    // ---- Clue System v2 (b): broadcast ต่อ clue instance ที่เกิดใหม่ (1 event / 1 clue) ----
+    // In-process only (MessagePipe) — ClueGenerationSystem publish หลังเก็บ instance
+    // เข้า registry กลางแล้ว; subscriber (UI/deduction/collect) อ่านรายละเอียดเพิ่ม
+    // จาก GameStateProvider.AllClueInstances ด้วย InstanceId
+    // (Information Hiding: message ไม่มี SourceActorId/WitnessNpcIds — ground truth
+    // ยังอยู่ฝั่งระบบ ไม่กระจายออกทาง event bus)
+    [MessagePackObject]
+    public class ClueGeneratedMessage
+    {
+        [Key(0)] public string InstanceId = string.Empty;
+        [Key(1)] public string DefId = string.Empty;
+        [Key(2)] public string LocationId = string.Empty;
     }
 
     // ---- Added in Lab B (Chibi Sprite Integration): location-change broadcasts ----

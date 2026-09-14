@@ -1,5 +1,6 @@
 using Marooned.Shared;
 using MessagePipe;
+using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -47,15 +48,18 @@ namespace Marooned.McpBridge
         private readonly IRemoteRequestHandler<GetGameStateRequest, GetGameStateResponse> _getGameState;
         private readonly IRemoteRequestHandler<GetVisibleNpcsRequest, GetVisibleNpcsResponse> _getVisibleNpcs;
         private readonly IRemoteRequestHandler<GetClueBoardRequest, GetClueBoardResponse> _getClueBoard;
+        private readonly IRemoteRequestHandler<GetClueGraphRequest, GetClueGraphResponse> _getClueGraph;
 
         public SurvivalQueryTools(
             IRemoteRequestHandler<GetGameStateRequest, GetGameStateResponse> getGameState,
             IRemoteRequestHandler<GetVisibleNpcsRequest, GetVisibleNpcsResponse> getVisibleNpcs,
-            IRemoteRequestHandler<GetClueBoardRequest, GetClueBoardResponse> getClueBoard)
+            IRemoteRequestHandler<GetClueBoardRequest, GetClueBoardResponse> getClueBoard,
+            IRemoteRequestHandler<GetClueGraphRequest, GetClueGraphResponse> getClueGraph)
         {
             _getGameState = getGameState;
             _getVisibleNpcs = getVisibleNpcs;
             _getClueBoard = getClueBoard;
+            _getClueGraph = getClueGraph;
         }
 
         [McpServerTool, Description("Get the player's current survival stats, inventory, location and active conditions.")]
@@ -86,13 +90,25 @@ namespace Marooned.McpBridge
             }));
         }
 
-        [McpServerTool, Description("Get all clue cards the player has personally collected so far, for deduction.")]
+        [McpServerTool, Description("Get the player's clue board for deduction. ⚠️ Shape changed: returns one entry per collected clue instance with fields instance_id, display_name, reliability (Strong/Weak/RedHerring), location_id, and witness_npc_ids (already filtered -- dead NPCs and the perpetrator never appear). Use get_clue_graph for a node/edge view of the same data.")]
         public async Task<string> GetClueBoard()
         {
             var res = await _getClueBoard.InvokeAsync(new GetClueBoardRequest());
-            return res.CollectedClueCardIds.Count == 0
+            return res.Entries.Count == 0
                 ? "No clues collected yet."
-                : string.Join(", ", res.CollectedClueCardIds);
+                : string.Join("\n", res.Entries.Select(e =>
+                    $"{e.InstanceId} | {e.DisplayName} | reliability={e.Reliability} | location={e.LocationId} | witnesses=[{string.Join(", ", e.WitnessNpcIds)}]"));
+        }
+
+        [McpServerTool, Description("Get the player's clue board as a graph: nodes are collected clues (type=clue) and their surviving witnesses (type=npc), edges are clue->witness with relation=witnessed. Same filtered data as get_clue_board -- perpetrators and dead NPCs never appear. Useful for reasoning about who saw what.")]
+        public async Task<string> GetClueGraph()
+        {
+            var res = await _getClueGraph.InvokeAsync(new GetClueGraphRequest());
+            if (res.Nodes.Count == 0)
+                return "No clues collected yet (empty graph).";
+            var nodes = string.Join(", ", res.Nodes.Select(n => $"{n.Id}({n.Type}:{n.Label})"));
+            var edges = string.Join(", ", res.Edges.Select(e => $"{e.From} -[{e.Relation}]-> {e.To}"));
+            return $"nodes: [{nodes}]\nedges: [{edges}]";
         }
     }
 
@@ -197,13 +213,16 @@ namespace Marooned.McpBridge
     {
         private readonly IRemoteRequestHandler<CallMeetingRequest, CallMeetingResponse> _callMeeting;
         private readonly IRemoteRequestHandler<AccuseNpcRequest, AccuseNpcResponse> _accuse;
+        private readonly IRemoteRequestHandler<InvestigateClueRequest, InvestigateClueResponse> _investigateClue;
 
         public DeductionTools(
             IRemoteRequestHandler<CallMeetingRequest, CallMeetingResponse> callMeeting,
-            IRemoteRequestHandler<AccuseNpcRequest, AccuseNpcResponse> accuse)
+            IRemoteRequestHandler<AccuseNpcRequest, AccuseNpcResponse> accuse,
+            IRemoteRequestHandler<InvestigateClueRequest, InvestigateClueResponse> investigateClue)
         {
             _callMeeting = callMeeting;
             _accuse = accuse;
+            _investigateClue = investigateClue;
         }
 
         [McpServerTool, Description("Report a body / call an emergency meeting when a murder is discovered.")]
@@ -225,6 +244,16 @@ namespace Marooned.McpBridge
             return res.WasCorrect
                 ? $"Correct -- one killer down, but more may remain. ({res.ResultText})"
                 : $"Wrong accusation. ({res.ResultText})";
+        }
+
+        [McpServerTool, Description("Investigate the player's current location for clues (blood stains, footprints, wet clothes, etc). Takes no parameters -- it always uses the player's current location server-side, so move first if you want to search elsewhere. Returns the found clue instance id (added to the clue board), or the failure reason (no_clue_at_location, investigation_failed).")]
+        public async Task<string> InvestigateClue()
+        {
+            // Clue System v2 (c): no parameters by design -- location comes from
+            // player state server-side (prevents cross-zone snooping)
+            var res = await _investigateClue.InvokeAsync(new InvestigateClueRequest());
+            if (!res.Success) return $"Investigation failed: {res.FailureReason}";
+            return $"Found a clue! (instance {res.FoundInstanceId}) -- added to your clue board.";
         }
     }
 }

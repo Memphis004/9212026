@@ -1,10 +1,10 @@
-=== BridgeRoundTrip — 13:24:03 ===
+=== BridgeRoundTrip — 07:24:58 ===
 [init] ok: {"result":{"protocolVersion":"2024-11-05","capabilities":{"logging":{},"tools":{"listChanged":true}},"serverInfo":{"name…
 [tools] state='get_game_state', move='move_to_location'
 [get_game_state] ok (bridge ↔ Unity TCP round trip)
 [cancel_move idle] not_moving ✓
 [cancel_move mid-walk] cancel ✓ + move → superseded ✓ (ผ่าน bridge ↔ TCP จริง)
 [move_to_location jungle_edge] responded in 2.2s (walk dist≈11.09 @ speed 3.5 → expect ~3.2s)
-[state] location=jungle_edge, pos=(9.91,4.96), activity=Idle → PASS
+[state] location=jungle_edge, pos=(9.92,4.96), activity=Idle → PASS
 
 RESULT: PASS

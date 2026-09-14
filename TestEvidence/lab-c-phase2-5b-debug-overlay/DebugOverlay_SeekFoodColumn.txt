@@ -1,4 +1,4 @@
-=== DebugOverlay_SeekFoodColumn — 13:56:53 ===
+=== DebugOverlay_SeekFoodColumn — 07:43:10 ===
 [C] Hunger=80 (>55) -> AI column = 'SeekFood' (sawSeekFood=True)
 
 RESULT: PASS

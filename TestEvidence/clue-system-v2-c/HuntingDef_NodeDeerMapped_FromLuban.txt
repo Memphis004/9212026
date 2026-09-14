@@ -1,0 +1,4 @@
+=== Clue System v2 (c) Hunting-def mapping — 07:11:22 ===
+node_deer.IsHuntingTarget=true; tree/rock/bush=false ( Luban → generated → Shared mapping ครบ)
+RESULT: PASS
+

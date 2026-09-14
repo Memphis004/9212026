@@ -1,5 +1,4 @@
-=== KeyboardInput_Blocked_DuringAutoMove — 13:56:47 ===
-[cancel] stopped at (1.65,0.82), keyboard moved +1.76 in 0.5s → PASS
+=== KeyboardInput_Blocked_DuringAutoMove — 07:43:04 ===
 [cancel_move] idle→not_moving; mid-walk cancel at (1.6,0.8) → move=superseded, zone=beach คงเดิม → PASS
 [C] WASD injected ระหว่าง auto-move → moved=3.51 in 1s (cap 4.7) → PASS
 

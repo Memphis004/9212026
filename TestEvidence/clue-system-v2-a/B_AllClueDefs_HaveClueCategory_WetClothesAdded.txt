@@ -1,0 +1,9 @@
+=== Clue System v2 (a) Test B — 07:11:22 ===
+ClueDefs.Count = 5
+clue_blood_stain: category='blood', reliability=Strong
+clue_scratch_mark: category='general', reliability=Weak
+clue_footprint_mud: category='footprint', reliability=Weak
+clue_torn_cloth: category='general', reliability=RedHerring
+clue_wet_clothes: category='wet', reliability=Weak
+RESULT: PASS
+

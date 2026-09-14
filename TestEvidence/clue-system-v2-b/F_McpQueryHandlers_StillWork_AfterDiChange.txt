@@ -1,0 +1,9 @@
+=== Clue System v2 (b) Test F (regression) — 07:49:44 ===
+get_game_state: location=cave_entrance hunger=100.0 thirst=100.0 → OK
+get_visible_npcs: 1 npc(s) → OK (AllConditionCardIds ผ่าน FilterVisible ไม่ throw)
+get_clue_board: 0 entry(ies) → OK (shape (d))
+get_clue_graph: 0 node(s), 0 edge(s) → OK
+DI resolve: ClueGenerationSystem / NpcDirectorSystem / DeductionSystem → OK
+RESULT: PASS
+
+RESULT: PASS

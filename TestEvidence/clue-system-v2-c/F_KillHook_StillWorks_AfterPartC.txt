@@ -1,0 +1,5 @@
+=== Clue System v2 (c) Test F (regression) — 07:43:00 ===
+TryEliminate(npc_01 → npc_02 @ cave_entrance): True 
+kill-hook → 1 clue(s): [clue_blood_stain], messages=1
+RESULT: PASS
+

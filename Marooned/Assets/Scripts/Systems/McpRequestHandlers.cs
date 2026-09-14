@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using Marooned.Shared;
@@ -167,14 +170,180 @@ namespace Marooned.Systems
         }
     }
 
+    /// <summary>
+    /// Clue System v2 (d): ⚠️ BREAKING — response เป็น List<ClueBoardEntry> แล้ว
+    /// (เดิม: List<string> CollectedClueCardIds — AI VTuber ต้อง adapt)
+    /// Loop CollectedClueInstanceIds → ClueInstance (registry กลาง) → ClueBoardEntry
+    /// พร้อม resolve DisplayName/Reliability จาก ClueDef + กรอง WitnessNpcIds
+    /// </summary>
     public class GetClueBoardHandler : IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse>
     {
         private readonly GameStateProvider _stateProvider;
-        public GetClueBoardHandler(GameStateProvider stateProvider) => _stateProvider = stateProvider;
+        private readonly NpcDirectorSystem _npcDirector;
+        private readonly LubanDataService _data;
+
+        public GetClueBoardHandler(GameStateProvider stateProvider, NpcDirectorSystem npcDirector,
+            LubanDataService dataService)
+        {
+            _stateProvider = stateProvider;
+            _npcDirector = npcDirector;
+            _data = dataService;
+        }
 
         public UniTask<GetClueBoardResponse> InvokeAsync(GetClueBoardRequest request, CancellationToken cancellationToken = default)
         {
-            return UniTask.FromResult(new GetClueBoardResponse { CollectedClueCardIds = _stateProvider.GetPlayer().CollectedClueCardIds });
+            var player = _stateProvider.GetPlayer();
+            var entries = new List<ClueBoardEntry>(player.CollectedClueInstanceIds.Count);
+
+            foreach (var instanceId in player.CollectedClueInstanceIds)
+            {
+                if (!_stateProvider.AllClueInstances.TryGetValue(instanceId, out var clue))
+                    continue; // instance หายจาก registry (round reset?) — ข้าม ไม่ crash
+
+                entries.Add(new ClueBoardEntry
+                {
+                    InstanceId = clue.InstanceId,
+                    DisplayName = ResolveDisplayName(clue.DefId),
+                    Reliability = ResolveReliability(clue.DefId),
+                    LocationId = clue.LocationId,
+                    WitnessNpcIds = FilterWitnesses(clue),
+                });
+            }
+
+            return UniTask.FromResult(new GetClueBoardResponse { Entries = entries });
+        }
+
+        /// <summary>
+        /// ⚠️ Information Hiding ตาม spec: กรองแค่ exclude killer/source + IsAlive
+        /// (player_local คงไว้เสมอ — player เป็นพยานของตัวเองได้หลัง investigate)
+        /// ไม่มีระบบ "ไม่เคย observe" — ไม่มี sighting log จริงในเกม
+        /// </summary>
+        internal List<string> FilterWitnesses(ClueInstance clue)
+        {
+            return clue.WitnessNpcIds
+                .Where(id => id == GameStateProvider.LocalPlayerId ||
+                             (_npcDirector.Npcs.TryGetValue(id, out var npc) && npc.IsAlive))
+                .ToList();
+        }
+
+        internal string ResolveDisplayName(string defId)
+            => _data.ClueDefs.TryGetValue(defId, out var def) ? def.DisplayName : defId;
+
+        internal string ResolveReliability(string defId)
+            => _data.ClueDefs.TryGetValue(defId, out var def) ? def.Reliability.ToString() : string.Empty;
+    }
+
+    /// <summary>
+    /// Clue System v2 (d): get_clue_graph — graph view ของ clue board เดียวกัน
+    /// Nodes: clue ที่ player เก็บ (type="clue", label=DisplayName) + witness หลังกรอง (type="npc", label=id)
+    /// Edges: clue → witness (relation="witnessed")
+    /// ⚠️ Information Hiding: ไม่มี SourceActorId ใน nodes/edges เด็ดขาด
+    /// </summary>
+    public class GetClueGraphHandler : IAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse>
+    {
+        // ⚠️ ผูกผ่าน interface MessagePipe (IAsyncRequestHandler<...>) ไม่ใช่ concrete class —
+        // VContainer register เฉพาะ interface mapping ตอน RegisterAsyncRequestHandler
+        private readonly IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse> _board;
+        private readonly GameStateProvider _stateProvider;
+
+        public GetClueGraphHandler(IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse> board,
+            GameStateProvider stateProvider)
+        {
+            _board = board;
+            _stateProvider = stateProvider;
+        }
+
+        public UniTask<GetClueGraphResponse> InvokeAsync(GetClueGraphRequest request, CancellationToken cancellationToken = default)
+        {
+            var board = _board.InvokeAsync(new GetClueBoardRequest()).GetAwaiter().GetResult();
+
+            var nodes = new List<GraphNode>();
+            var edges = new List<GraphEdge>();
+            var seenWitnesses = new HashSet<string>();
+
+            foreach (var entry in board.Entries)
+            {
+                nodes.Add(new GraphNode { Id = entry.InstanceId, Type = "clue", Label = entry.DisplayName });
+
+                foreach (var witnessId in entry.WitnessNpcIds)
+                {
+                    if (seenWitnesses.Add(witnessId))
+                        nodes.Add(new GraphNode { Id = witnessId, Type = "npc", Label = witnessId });
+
+                    edges.Add(new GraphEdge { From = entry.InstanceId, To = witnessId, Relation = "witnessed" });
+                }
+            }
+
+            return UniTask.FromResult(new GetClueGraphResponse { Nodes = nodes, Edges = edges });
+        }
+    }
+
+    /// <summary>
+    /// Clue System v2 (c): investigate_clue — ค้นหา clue instance ณ ตำแหน่งปัจจุบันของ
+    /// player ฝั่ง server เท่านั้น
+    /// ⚠️ Security: InvestigateClueRequest เป็น empty request โดยตั้งใจ — ห้ามรับ
+    /// LocationId จาก caller ป้องกัน AI สำรวจข้ามโซน (บั๊กเดิมที่เคยแก้ใน
+    /// ExplorationSystem)
+    /// Information Hiding: คืนเฉพาะ instance id ของ clue ที่เจอ (เห็นได้) —
+    /// ไม่มี SourceActorId/WitnessNpcIds ใน response เด็ดขาด
+    /// </summary>
+    public class InvestigateClueHandler : IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>
+    {
+        private readonly GameStateProvider _stateProvider;
+        private readonly LubanDataService _data;
+        private readonly McpMainThreadDispatcher _mainThread;
+        private readonly System.Random _rng = new();
+
+        public InvestigateClueHandler(GameStateProvider stateProvider, LubanDataService dataService,
+            McpMainThreadDispatcher mainThread)
+        {
+            _stateProvider = stateProvider;
+            _data = dataService;
+            _mainThread = mainThread;
+        }
+
+        public UniTask<InvestigateClueResponse> InvokeAsync(InvestigateClueRequest request, CancellationToken cancellationToken = default)
+        {
+            // Threading (Lab B Phase 6 pattern): handler ถูก invoke บน TCP background
+            // thread — mutate state (CollectedClueInstanceIds) + อ่าน registry ต้อง
+            // รันบน main thread เสมอ ไม่งั้น race กับ game tick
+            return _mainThread.EnqueueAsync(() =>
+            {
+                // ⚠️ ใช้ player location ฝั่ง server เท่านั้น — request ไม่มีพารามิเตอร์ให้แก้
+                var locationId = _stateProvider.GetPlayer().CurrentLocationId;
+
+                // หา clue ทั้งหมดใน location นี้ที่ยังไม่ถูกเก็บ
+                var cluesHere = _stateProvider.AllClueInstances.Values
+                    .Where(c => c.LocationId == locationId
+                             && !_stateProvider.GetPlayer().CollectedClueInstanceIds.Contains(c.InstanceId))
+                    .ToList();
+
+                if (cluesHere.Count == 0)
+                    return new InvestigateClueResponse { Success = false, FailureReason = "no_clue_at_location" };
+
+                // VisibleToBystanders=true → เห็นทันที; false → roll 50%
+                // (ค้นหาเรียงตามลำดับ registry — ตัวแรกที่ "มองเห็นได้" ในรอบนี้)
+                ClueInstance found = null;
+                foreach (var c in cluesHere)
+                {
+                    if (!_data.ClueDefs.TryGetValue(c.DefId, out var def)) continue;
+                    if (def.VisibleToBystanders || _rng.NextDouble() < 0.5)
+                    {
+                        found = c;
+                        break;
+                    }
+                }
+
+                if (found == null)
+                    return new InvestigateClueResponse { Success = false, FailureReason = "investigation_failed" };
+
+                // เก็บเข้า inventory ของ player (กันซ้ำ — instance เดียวเก็บครั้งเดียว)
+                var player = _stateProvider.GetPlayer();
+                if (!player.CollectedClueInstanceIds.Contains(found.InstanceId))
+                    player.CollectedClueInstanceIds.Add(found.InstanceId);
+
+                return new InvestigateClueResponse { Success = true, FoundInstanceId = found.InstanceId };
+            });
         }
     }
 

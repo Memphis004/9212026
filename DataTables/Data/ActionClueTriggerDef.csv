@@ -1,0 +1,10 @@
+##var,id,triggerSource,clueDefId,weight
+##type,string,string,string,int
+##,trigger identifier,enum ClueTriggerSource,ref ClueDef.Id,probability weight
+,trig_kill_blood,KillSabotage,clue_blood_stain,100
+,trig_kill_scratch,KillSabotage,clue_scratch_mark,30
+,trig_hunt_blood,Hunting,clue_blood_stain,25
+,trig_hunt_scratch,Hunting,clue_scratch_mark,15
+,trig_water_wet,IncidentalAction,clue_wet_clothes,20
+,trig_water_mud,IncidentalAction,clue_footprint_mud,15
+,trig_task_sabotage,TaskSabotage,clue_torn_cloth,40

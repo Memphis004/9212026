@@ -135,6 +135,15 @@ namespace Marooned.Core
             builder.Register<InnocentUtilityAI>(Lifetime.Singleton).AsSelf();
             builder.Register<KillerPlanner>(Lifetime.Singleton).AsSelf();
 
+            // --- Clue System v2 (b): generation pipeline ---
+            // จุดเดียวที่สร้าง ClueInstance (TryGenerate) — kill-hook ของ
+            // NpcDirectorSystem.SpawnClues เดิม hardcode card ids ถูกแทนด้วย pipeline นี้
+            // ถือ UtilityContext (ไม่ใช่ NpcDirectorSystem ตรง ๆ) เพื่อกัน DI cycle:
+            // NpcDirectorSystem → ClueGenerationSystem → UtilityContext → NpcDirectorSystem
+            // (TryGenerate อ่าน ctx.NpcDirector ตอนเรียกจริงเท่านั้น — constructor ของ
+            // director Bind(this) เข้า context เสมอ จึงไม่มีจังหวะ null)
+            builder.Register<ClueGenerationSystem>(Lifetime.Singleton).AsSelf();
+
             // --- NPC movement (Lab C Phase 2) ---
             // เดิน NPC เข้าหา TargetX/Y ที่ถูกตั้งไว้ — การเลือก target เป็นหน้าที่
             // AI (Step 4) ระบบนี้เหลือหน้าที่เดินอย่างเดียว; GameTickDriver เรียก Tick
@@ -177,6 +186,10 @@ namespace Marooned.Core
             builder.RegisterAsyncRequestHandler<GetGameStateRequest, GetGameStateResponse, GetGameStateHandler>(options);
             builder.RegisterAsyncRequestHandler<GetVisibleNpcsRequest, GetVisibleNpcsResponse, GetVisibleNpcsHandler>(options);
             builder.RegisterAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse, GetClueBoardHandler>(options);
+
+            // Clue System v2 (d): get_clue_graph — reuse GetClueBoardHandler ให้ witness
+            // filtering/DisplayName resolve เกิดที่เดียว (information hiding เดียวกัน)
+            builder.RegisterAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse, GetClueGraphHandler>(options);
             builder.RegisterAsyncRequestHandler<MoveToLocationRequest, MoveToLocationResponse, MoveToLocationHandler>(options);
             // cancel_move: ยกเลิก auto-move ที่กำลังรัน (VTuber เปลี่ยนใจ/หยุดเพื่อสำรวจ)
             builder.RegisterAsyncRequestHandler<CancelMoveRequest, CancelMoveResponse, CancelMoveHandler>(options);
@@ -184,6 +197,9 @@ namespace Marooned.Core
             builder.RegisterAsyncRequestHandler<CallMeetingRequest, CallMeetingResponse, CallMeetingHandler>(options);
             // Lab C Phase 1.5 (harvest_node): เก็บเกี่ยว node ใกล้ผู้เล่น (auto-pick tool)
             builder.RegisterAsyncRequestHandler<HarvestNodeRequest, HarvestNodeResponse, HarvestNodeHandler>(options);
+            // Clue System v2 (c): investigate_clue — ค้น clue ที่ตำแหน่งปัจจุบันของ player
+            // (empty request — ห้ามรับ LocationId จาก caller กันสำรวจข้ามโซน)
+            builder.RegisterAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse, InvestigateClueHandler>(options);
 
             // --- UI root ---
             builder.RegisterEntryPoint<UIRoot>();

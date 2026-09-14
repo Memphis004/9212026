@@ -6,7 +6,8 @@
     "yieldItemId": "wood_log",
     "yieldCount": 2,
     "durability": 3,
-    "regrowTime": 0
+    "regrowTime": 0,
+    "isHuntingTarget": false
   },
   {
     "id": "rock_stone",
@@ -15,7 +16,8 @@
     "yieldItemId": "stone",
     "yieldCount": 1,
     "durability": 5,
-    "regrowTime": 0
+    "regrowTime": 0,
+    "isHuntingTarget": false
   },
   {
     "id": "bush_berry",
@@ -24,6 +26,17 @@
     "yieldItemId": "berry",
     "yieldCount": 1,
     "durability": 1,
-    "regrowTime": 300
+    "regrowTime": 300,
+    "isHuntingTarget": false
+  },
+  {
+    "id": "node_deer",
+    "displayName": "กวาง",
+    "requiredToolCardId": "tool_axe",
+    "yieldItemId": "raw_fish",
+    "yieldCount": 2,
+    "durability": 2,
+    "regrowTime": 600,
+    "isHuntingTarget": true
   }
 ]

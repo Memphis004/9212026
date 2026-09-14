@@ -1,0 +1,4 @@
+=== Clue System v2 (a) Test C — 07:11:22 ===
+AllClueInstances.Count = 0 (fresh GameStateProvider)
+RESULT: PASS
+

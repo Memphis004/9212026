@@ -30,6 +30,7 @@ namespace Marooned.Tests.Editor
         private NpcDirectorSystem _director;
         private FakePublisher<NpcEliminatedMessage> _eliminatedMessages;
         private FakePublisher<NpcLocationChangedMessage> _directorMessages;
+        private FakePublisher<ClueGeneratedMessage> _clueMessages;
         private NpcSurvivalSystem _survival;
         private NpcMovementSystem _movement;
         private NpcZoneTransitionSystem _transition;
@@ -40,14 +41,20 @@ namespace Marooned.Tests.Editor
         public void SetUp()
         {
             _data = new LubanDataService(); // ตารางจริงจาก Resources
-            _ctx = new UtilityContext(_data, new GameStateProvider());
+            var stateProvider = new GameStateProvider();
+            _ctx = new UtilityContext(_data, stateProvider);
             _eliminatedMessages = new FakePublisher<NpcEliminatedMessage>();
             _directorMessages = new FakePublisher<NpcLocationChangedMessage>();
+            _clueMessages = new FakePublisher<ClueGeneratedMessage>();
             _innocentAi = new InnocentUtilityAI(_ctx);
             var killer = new KillerPlanner(_ctx);
 
+            // Clue System v2 (b): generator ตัวจริง (ก่อน director ได้ — อ่าน
+            // ctx.NpcDirector ตอน TryGenerate เท่านั้น จึงไม่มีปัญหาลำดับ construct)
+            var clueGeneration = new ClueGenerationSystem(_data, stateProvider, _ctx, _clueMessages);
+
             _director = new NpcDirectorSystem(_data, _eliminatedMessages, _directorMessages,
-                _innocentAi, killer, _ctx);
+                _innocentAi, killer, _ctx, clueGeneration);
             _ctx.Bind(_director);
             _director.SetupRound(new[] { "npc_01", "npc_02", "npc_03" }, killerCount: 0);
             _director.MoveNpc("npc_01", "beach");

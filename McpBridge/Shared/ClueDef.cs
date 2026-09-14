@@ -16,6 +16,10 @@ namespace Marooned.Shared
         public string SpritePath = string.Empty;
         public ClueReliability Reliability;
         public bool VisibleToBystanders; // false = ต้องเข้าไป "ตรวจสอบ" (investigate_clue) ถึงจะเห็น
+
+        // Clue System v2 (a): หมวดของ clue ("wet", "blood", "footprint", ...)
+        // มาจาก DataTables/Data/ClueDef.csv column clueCategory — ว่าง = "general"
+        public string ClueCategory = string.Empty;
     }
 
     public class IllnessDef
