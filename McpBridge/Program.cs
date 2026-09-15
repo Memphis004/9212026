@@ -49,17 +49,20 @@ namespace Marooned.McpBridge
         private readonly IRemoteRequestHandler<GetVisibleNpcsRequest, GetVisibleNpcsResponse> _getVisibleNpcs;
         private readonly IRemoteRequestHandler<GetClueBoardRequest, GetClueBoardResponse> _getClueBoard;
         private readonly IRemoteRequestHandler<GetClueGraphRequest, GetClueGraphResponse> _getClueGraph;
+        private readonly IRemoteRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse> _getPinnedClues;
 
         public SurvivalQueryTools(
             IRemoteRequestHandler<GetGameStateRequest, GetGameStateResponse> getGameState,
             IRemoteRequestHandler<GetVisibleNpcsRequest, GetVisibleNpcsResponse> getVisibleNpcs,
             IRemoteRequestHandler<GetClueBoardRequest, GetClueBoardResponse> getClueBoard,
-            IRemoteRequestHandler<GetClueGraphRequest, GetClueGraphResponse> getClueGraph)
+            IRemoteRequestHandler<GetClueGraphRequest, GetClueGraphResponse> getClueGraph,
+            IRemoteRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse> getPinnedClues)
         {
             _getGameState = getGameState;
             _getVisibleNpcs = getVisibleNpcs;
             _getClueBoard = getClueBoard;
             _getClueGraph = getClueGraph;
+            _getPinnedClues = getPinnedClues;
         }
 
         [McpServerTool, Description("Get the player's current survival stats, inventory, location and active conditions.")]
@@ -100,15 +103,23 @@ namespace Marooned.McpBridge
                     $"{e.InstanceId} | {e.DisplayName} | reliability={e.Reliability} | location={e.LocationId} | witnesses=[{string.Join(", ", e.WitnessNpcIds)}]"));
         }
 
-        [McpServerTool, Description("Get the player's clue board as a graph: nodes are collected clues (type=clue) and their surviving witnesses (type=npc), edges are clue->witness with relation=witnessed. Same filtered data as get_clue_board -- perpetrators and dead NPCs never appear. Useful for reasoning about who saw what.")]
+        [McpServerTool, Description("Get the player's clue board as a human-readable graph summary: one line per collected clue listing who (surviving witnesses) saw it. Same filtered data as get_clue_board -- perpetrators and dead NPCs never appear. Use for reasoning about who saw what.")]
         public async Task<string> GetClueGraph()
         {
+            // Clue System v2 (e): human-readable summary (MCP convention — tool คืน text
+            // อ่านรู้เรื่อง ไม่ใช่ JSON/debug string) — reuse formatter เดียวกับ ClueBoardView
+            // เพื่อให้ AI อ่านกราฟแบบเดียวกับที่ผู้เล่นเห็นในเกม
             var res = await _getClueGraph.InvokeAsync(new GetClueGraphRequest());
-            if (res.Nodes.Count == 0)
-                return "No clues collected yet (empty graph).";
-            var nodes = string.Join(", ", res.Nodes.Select(n => $"{n.Id}({n.Type}:{n.Label})"));
-            var edges = string.Join(", ", res.Edges.Select(e => $"{e.From} -[{e.Relation}]-> {e.To}"));
-            return $"nodes: [{nodes}]\nedges: [{edges}]";
+            return ClueGraphTextFormat.Render(res);
+        }
+
+        [McpServerTool, Description("Get the clue-board nodes the player has pinned for side-by-side comparison, oldest first. Same filtered data as get_clue_board (perpetrators and dead NPCs never appear). For each pinned clue: name, reliability, location, surviving witnesses; for each pinned NPC witness: current zone, alive status, and the collected clues they witnessed (loose alibi). Empty result means nothing is pinned right now.")]
+        public async Task<string> GetPinnedClues()
+        {
+            // Clue System v2 (e) pin workspace: human-readable summary (MCP convention) —
+            // reuse ClueGraphTextFormat.RenderPinned เพื่อให้ AI อ่าน pin เดียวกับ UI
+            var res = await _getPinnedClues.InvokeAsync(new GetPinnedCluesRequest());
+            return ClueGraphTextFormat.RenderPinned(res);
         }
     }
 
@@ -123,6 +134,7 @@ namespace Marooned.McpBridge
         private readonly IRemoteRequestHandler<UseCardRequest, UseCardResponse> _useCard;
         private readonly IRemoteRequestHandler<AwaitNextEventRequest, AwaitNextEventResponse> _awaitNextEvent;
         private readonly IRemoteRequestHandler<HarvestNodeRequest, HarvestNodeResponse> _harvestNode;
+        private readonly IRemoteRequestHandler<SetPinnedClueRequest, SetPinnedClueResponse> _setPinnedClue;
 
         public SurvivalActionTools(
             IRemoteRequestHandler<ExploreLocationRequest, ExploreLocationResponse> explore,
@@ -131,7 +143,8 @@ namespace Marooned.McpBridge
             IRemoteRequestHandler<CancelMoveRequest, CancelMoveResponse> cancelMove,
             IRemoteRequestHandler<UseCardRequest, UseCardResponse> useCard,
             IRemoteRequestHandler<AwaitNextEventRequest, AwaitNextEventResponse> awaitNextEvent,
-            IRemoteRequestHandler<HarvestNodeRequest, HarvestNodeResponse> harvestNode)
+            IRemoteRequestHandler<HarvestNodeRequest, HarvestNodeResponse> harvestNode,
+            IRemoteRequestHandler<SetPinnedClueRequest, SetPinnedClueResponse> setPinnedClue)
         {
             _explore = explore;
             _craft = craft;
@@ -140,6 +153,21 @@ namespace Marooned.McpBridge
             _useCard = useCard;
             _awaitNextEvent = awaitNextEvent;
             _harvestNode = harvestNode;
+            _setPinnedClue = setPinnedClue;
+        }
+
+        [McpServerTool, Description("Pin or unpin a clue-board node (clue instance id or witness NPC id from get_clue_graph) on the player's clue board for side-by-side comparison. Idempotent set semantics -- safe to retry. Response always includes the current pin list (use it to update your model without another call). Pinning a 4th node drops the oldest automatically. Same state the player sees in-game.")]
+        public async Task<string> SetPinnedClue(
+            [Description("Node id to pin/unpin (from get_clue_graph: a clue instance id or an NPC witness id)")] string nodeId,
+            [Description("true = pin the node, false = unpin it")] bool pinned)
+        {
+            var res = await _setPinnedClue.InvokeAsync(new SetPinnedClueRequest { NodeId = nodeId ?? string.Empty, Pinned = pinned });
+            if (!res.Success)
+                return $"Pin failed: {res.FailureReason}. Current pins: [{string.Join(", ", res.PinnedNodeIds)}]";
+            var action = res.FailureReason == "already_pinned" ? "already pinned (no change)"
+                : res.FailureReason == "not_pinned" ? "already unpinned (no change)"
+                : pinned ? "Pinned" : "Unpinned";
+            return $"{action} {nodeId}. Current pins (oldest first): [{string.Join(", ", res.PinnedNodeIds)}]";
         }
 
         [McpServerTool, Description("Explore the player's current location. Returns any cards found; empty if the node is temporarily depleted.")]

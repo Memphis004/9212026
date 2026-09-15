@@ -1,0 +1,7 @@
+=== Clue System v2 (e) Test B — 09:23:07 ===
+[seed] collected clues: 3
+[B] clue nodes (inner): 3 @ r≈150,150,150
+[B] npc nodes (outer): 2 @ r≈300,300
+[B] edges rendered: 4
+RESULT: PASS
+

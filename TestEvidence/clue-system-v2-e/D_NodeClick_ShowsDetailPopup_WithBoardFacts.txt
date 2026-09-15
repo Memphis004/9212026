@@ -1,0 +1,7 @@
+=== Clue System v2 (e) Test D — 09:23:07 ===
+[D] popup text: คราบเลือด | ความน่าเชื่อถือ: Strong
+พบที่: beach
+พยาน: npc_01, npc_02, player_local
+[D] npc nodes verified clickable: True
+RESULT: PASS
+

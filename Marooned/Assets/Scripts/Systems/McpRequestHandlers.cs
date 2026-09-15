@@ -279,6 +279,156 @@ namespace Marooned.Systems
     }
 
     /// <summary>
+    /// Clue System v2 (e) pin workspace: get_pinned_clues — รายการ pin เดียวกับที่กระดาน
+    /// ในเกมแสดง (อ่านจาก CluePinState singleton เดียวกับที่ ClueBoardPresenter เขียน —
+    /// state เดียวกัน ไม่มีสำเนา)
+    /// clue pin → resolve ผ่าน GetClueBoardHandler เดิม (witness filter เดิม รวม player_local)
+    /// npc pin → NpcDirectorSystem (โซนที่ player เห็นจริง + อาลิไบคร่าว ๆ = เบาะแสที่เป็นพยาน)
+    /// pin ของ node ที่หายไปจากเกม (clue ถูกถอน/npc โดนลบ) ไม่ถูกส่งกลับ — ไม่มี stale หลุด
+    /// ⚠️ Information Hiding: เนื้อหาเดียวกับ popup บนกระดาน — ไม่มี SourceActorId/killer Role
+    /// </summary>
+    public class GetPinnedCluesHandler : IAsyncRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse>
+    {
+        private readonly CluePinState _pins;
+        private readonly IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse> _board;
+        private readonly NpcDirectorSystem _npcDirector;
+
+        public GetPinnedCluesHandler(CluePinState pins,
+            IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse> board,
+            NpcDirectorSystem npcDirector)
+        {
+            _pins = pins;
+            _board = board;
+            _npcDirector = npcDirector;
+        }
+
+        public UniTask<GetPinnedCluesResponse> InvokeAsync(GetPinnedCluesRequest request, CancellationToken cancellationToken = default)
+        {
+            // NodeId ว่าง = ทั้งหมดตามลำดับ pin (MCP tool); ใส่ id = node เดียว (presenter/reuse)
+            IEnumerable<string> ids = string.IsNullOrEmpty(request.NodeId)
+                ? _pins.PinnedNodeIds
+                : new[] { request.NodeId };
+
+            // GetClueGraphHandler ใช้ pattern เดียวกัน — InvokeAsync ของ board sync-complete เสมอ
+            var board = _board.InvokeAsync(new GetClueBoardRequest()).GetAwaiter().GetResult();
+            var pinned = new List<PinnedNodeEntry>();
+
+            foreach (var nodeId in ids)
+            {
+                ClueBoardEntry clueEntry = null;
+                foreach (var e in board.Entries)
+                    if (e != null && e.InstanceId == nodeId) { clueEntry = e; break; }
+
+                if (clueEntry != null)
+                {
+                    pinned.Add(new PinnedNodeEntry
+                    {
+                        NodeId = clueEntry.InstanceId,
+                        Type = "clue",
+                        DisplayName = clueEntry.DisplayName,
+                        Reliability = clueEntry.Reliability,
+                        LocationId = clueEntry.LocationId,
+                        WitnessNpcIds = clueEntry.WitnessNpcIds ?? new List<string>(),
+                    });
+                    continue;
+                }
+
+                // npc pin — ถ้า npc หายไปเอง (โดนลบ) ก็ข้าม (ไม่คืน stale)
+                if (!_npcDirector.Npcs.TryGetValue(nodeId, out var npc)) continue;
+
+                var witnessed = new List<string>();
+                foreach (var e in board.Entries)
+                    if (e != null && e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(nodeId))
+                        witnessed.Add($"{e.DisplayName} @ {e.LocationId}");
+
+                pinned.Add(new PinnedNodeEntry
+                {
+                    NodeId = nodeId,
+                    Type = "npc",
+                    Zone = npc.CurrentLocationId,
+                    IsAlive = npc.IsAlive,
+                    WitnessedClues = witnessed,
+                });
+            }
+
+            return UniTask.FromResult(new GetPinnedCluesResponse { Pinned = pinned });
+        }
+    }
+
+    /// <summary>
+    /// Clue System v2 (e): set_pinned_clue — AI pin/unpin node บนกระดานเองได้
+    /// Explicit set semantics (Pinned = true/false) ไม่ใช่ toggle — idempotent ปลอดภัยกับ retry
+    /// ⚠️ Validation: NodeId ต้องเป็น node ในกราฟจริง (get_clue_graph — universe เดียวกับ
+    /// ที่ board วาด หลัง filter) กัน pin id ปลอม/หมดอายุ; idempotent: pin ซ้ำ/unpin ที่ไม่ได้ pin = OK
+    /// ⚠️ Main-thread: CluePinState.Changed ถูก presenter subscribe (UI refresh) — mutate
+    /// ผ่าน McpMainThreadDispatcher เหมือน mutating handlers อื่น
+    /// ⚠️ Response แนบ PinnedNodeIds ล่าสุดทุกครั้ง — AI แก้ model ใน step เดียว
+    /// </summary>
+    public class SetPinnedClueHandler : IAsyncRequestHandler<SetPinnedClueRequest, SetPinnedClueResponse>
+    {
+        private readonly CluePinState _pins;
+        private readonly IAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse> _graph;
+        private readonly McpMainThreadDispatcher _mainThread;
+
+        public SetPinnedClueHandler(CluePinState pins,
+            IAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse> graph,
+            McpMainThreadDispatcher mainThread)
+        {
+            _pins = pins;
+            _graph = graph;
+            _mainThread = mainThread;
+        }
+
+        public UniTask<SetPinnedClueResponse> InvokeAsync(SetPinnedClueRequest request, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(request.NodeId))
+                return UniTask.FromResult(new SetPinnedClueResponse
+                {
+                    Success = false,
+                    FailureReason = "missing_node_id",
+                    PinnedNodeIds = _pins.PinnedNodeIds.ToList(),
+                });
+
+            // ตรวจว่า node มีจริงในกราฟ (board หลัง filter — เท่ากับสิ่งที่ AI เห็นผ่าน get_clue_graph)
+            var graph = _graph.InvokeAsync(new GetClueGraphRequest()).GetAwaiter().GetResult();
+            var exists = graph.Nodes.Any(n => n != null && n.Id == request.NodeId);
+            if (!exists)
+                return UniTask.FromResult(new SetPinnedClueResponse
+                {
+                    Success = false,
+                    FailureReason = "unknown_node",
+                    PinnedNodeIds = _pins.PinnedNodeIds.ToList(),
+                });
+
+            // mutate บน main thread (presenter subscribe Changed → UI refresh)
+            return _mainThread.EnqueueAsync(() =>
+            {
+                var wasPinned = _pins.IsPinned(request.NodeId);
+                if (request.Pinned == wasPinned)
+                {
+                    // idempotent: pin ซ้ำ / unpin ที่ไม่ได้ pin = สำเร็จ ไม่ต้องทำอะไร
+                    // (FailureReason เป็น informational — response ยัง Success)
+                    return new SetPinnedClueResponse
+                    {
+                        Success = true,
+                        FailureReason = request.Pinned ? "already_pinned" : "not_pinned",
+                        PinnedNodeIds = _pins.PinnedNodeIds.ToList(),
+                    };
+                }
+
+                // Toggle = set/unset เป๊ะ (state ก่อนหน้าตรงข้ามแล้ว) — pin เกิน 3
+                // ตัวเก่าสุดหลุดอัตโนมัติ (กติกาเดียวกับ player pin บนกระดาน)
+                _pins.Toggle(request.NodeId);
+                return new SetPinnedClueResponse
+                {
+                    Success = true,
+                    PinnedNodeIds = _pins.PinnedNodeIds.ToList(),
+                };
+            });
+        }
+    }
+
+    /// <summary>
     /// Clue System v2 (c): investigate_clue — ค้นหา clue instance ณ ตำแหน่งปัจจุบันของ
     /// player ฝั่ง server เท่านั้น
     /// ⚠️ Security: InvestigateClueRequest เป็น empty request โดยตั้งใจ — ห้ามรับ

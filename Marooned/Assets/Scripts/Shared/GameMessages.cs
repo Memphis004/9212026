@@ -347,4 +347,60 @@ namespace Marooned.Shared
         [Key(5)] public bool Depleted;        // durability หมดพอดี (เติมเมื่อ Success)
         [Key(6)] public int RegrowSeconds;    // > 0 เมื่อ Depleted และจะงอกใหม่ (เติมเมื่อ Success)
     }
+
+    // ---- Clue System v2 (e) pin workspace: get_pinned_clues (bridge query tool) ----
+    // อ่าน ordered pin list เดียวกับที่กระดานในเกมแสดง (CluePinState singleton — ค่าเดียว
+    // กับ UI) เพื่อให้ AI VTuber เห็นว่า player กำลังเทียบ node อะไรอยู่บ้าง
+
+    [MessagePackObject]
+    public class GetPinnedCluesRequest
+    {
+        // ว่าง = รายการ pin ทั้งหมดตามลำดับ pin (MCP tool ใช้แบบนี้ — state ฝั่ง server
+        // เหมือน get_clue_board); ใส่ id = resolve node เดียว (presenter ใช้ตอนคลิก node
+        // — reuse chain เดียวกันทั้ง popup/การ์ด pin/MCP)
+        [Key(0)] public string NodeId = string.Empty;
+    }
+
+    /// <summary>รายละเอียด node ที่ pin — Type=="clue" ใช้ field กลุ่ม clue, Type=="npc" ใช้กลุ่ม npc
+    /// (เนื้อหาเดียวกับที่ popup/การ์ด pin บนกระดานโชว์ — ไม่มี ground truth เช่น SourceActorId/Role)</summary>
+    [MessagePackObject]
+    public class PinnedNodeEntry
+    {
+        [Key(0)] public string NodeId = string.Empty;
+        [Key(1)] public string Type = string.Empty;             // "clue" | "npc"
+        // ---- clue ----
+        [Key(2)] public string DisplayName = string.Empty;
+        [Key(3)] public string Reliability = string.Empty;      // Strong/Weak/RedHerring
+        [Key(4)] public string LocationId = string.Empty;
+        [Key(5)] public List<string> WitnessNpcIds = new();     // ผ่าน filter ของ GetClueBoardHandler แล้ว
+        // ---- npc witness ----
+        [Key(6)] public string Zone = string.Empty;             // CurrentLocationId (player เห็นจริง)
+        [Key(7)] public bool IsAlive;
+        [Key(8)] public List<string> WitnessedClues = new();    // "<label> @ <location>" — อาลิไบคร่าว ๆ
+    }
+
+    [MessagePackObject]
+    public class GetPinnedCluesResponse
+    {
+        [Key(0)] public List<PinnedNodeEntry> Pinned = new();   // เรียงตามลำดับ pin (เก่าสุดก่อน)
+    }
+
+    // ---- Clue System v2 (e): set_pinned_clue (bridge mutating tool — AI pin/unpin เองได้) ----
+    // Explicit set semantics (Pinned = true/false) ไม่ใช่ toggle — ปลอดภัยกว่าเวลา AI retry;
+    // response แนบ pin list ล่าสุดเสมอ เพื่อให้ AI แก้ model ของตัวเองได้ใน step เดียว
+
+    [MessagePackObject]
+    public class SetPinnedClueRequest
+    {
+        [Key(0)] public string NodeId = string.Empty;  // node id จาก get_clue_graph (clue instance id หรือ witness npc id)
+        [Key(1)] public bool Pinned;                   // true = pin, false = unpin
+    }
+
+    [MessagePackObject]
+    public class SetPinnedClueResponse
+    {
+        [Key(0)] public bool Success;
+        [Key(1)] public string FailureReason = string.Empty; // "missing_node_id", "unknown_node", "already_pinned", "not_pinned"
+        [Key(2)] public List<string> PinnedNodeIds = new();  // state หลังคำสั่ง (เรียงตามลำดับ pin, เก่าสุดก่อน)
+    }
 }

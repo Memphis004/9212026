@@ -1,4 +1,4 @@
-=== E_WhenNoItemInRange_IsNotConsumed_PassesThrough — 07:43:00 ===
+=== E_WhenNoItemInRange_IsNotConsumed_PassesThrough — 09:23:09 ===
 [B] 3 real + 1 far loose item moved away, player @ (9.91, 4.96), radius 1.6 → press survived → PASS
 
 RESULT: PASS

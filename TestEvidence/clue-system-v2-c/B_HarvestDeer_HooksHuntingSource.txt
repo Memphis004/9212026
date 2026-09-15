@@ -1,4 +1,4 @@
-=== Clue System v2 (c) Test B — 07:42:59 ===
+=== Clue System v2 (c) Test B — 09:23:08 ===
 harvest #1: +2 raw_fish (depleted=False)
 harvest #2: +2 raw_fish (depleted=False)
 harvest #3: +2 raw_fish (depleted=False)
@@ -39,11 +39,11 @@ harvest #37: +2 raw_fish (depleted=False)
 harvest #38: +2 raw_fish (depleted=False)
 harvest #39: +2 raw_fish (depleted=False)
 harvest #40: +2 raw_fish (depleted=False)
-harvest สำเร็จ 40/40 → Hunting clue เกิด 17 ครั้ง (expect ≈40% ของรอบ)
-  clue_scratch_mark @ beach witnesses=[] (player = hunter → ไม่มี player_local)
+harvest สำเร็จ 40/40 → Hunting clue เกิด 14 ครั้ง (expect ≈40% ของรอบ)
+  clue_blood_stain @ beach witnesses=[] (player = hunter → ไม่มี player_local)
   clue_blood_stain @ beach witnesses=[] (player = hunter → ไม่มี player_local)
   clue_scratch_mark @ beach witnesses=[] (player = hunter → ไม่มี player_local)
-  clue_blood_stain @ beach witnesses=[] (player = hunter → ไม่มี player_local)
   clue_scratch_mark @ beach witnesses=[] (player = hunter → ไม่มี player_local)
+  clue_blood_stain @ beach witnesses=[] (player = hunter → ไม่มี player_local)
 RESULT: PASS
 

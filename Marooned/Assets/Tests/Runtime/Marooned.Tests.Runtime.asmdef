@@ -8,7 +8,8 @@
         "Luban.Runtime",
         "VContainer",
         "MessagePipe",
-        "UniTask"
+        "UniTask",
+        "UnityEngine.UI"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

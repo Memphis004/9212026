@@ -1,0 +1,6 @@
+=== Clue System v2 (e) Test C — 09:23:07 ===
+[C] nodes before: 5
+[C] collected clue d6bd54b0… (ยังไม่ re-render) — nodes now: 5
+[C] nodes after: 7
+RESULT: PASS
+

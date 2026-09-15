@@ -1,0 +1,3 @@
+event: message
+data: {"result":{"content":[{"type":"text","text":"[Error] No Renderers found on target GameObject or its children. Cannot compute bounds."}],"isError":true},"id":54,"jsonrpc":"2.0"}
+

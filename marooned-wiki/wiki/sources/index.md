@@ -16,7 +16,19 @@ tags:
 # 📚 Marooned Wiki — สารบัญ
 
 > เอกสารทั้งหมดของโปรเจค Marooned (Card Survival × Social Deduction)
-อัปเดตล่าสุด: 2026-09-14 (Clue System v2 ครบ 4 ส่วน (a)–(d): clue เป็น instance object
+อัปเดตล่าสุด: 2026-09-15 (Clue System v2 (e) presentation layer: ClueBoardPresenter/View
+MVP Lite — reuse GetClueGraphHandler, radial layout วงใน clue/วงนอก npc, get_clue_graph
+คืน human-readable text ผ่าน ClueGraphTextFormat + PlayMode tests ผ่านครบ 9/9 A–I
+(TestEvidence/clue-system-v2-e) + toggle กระดาน (Tab + ปุ่ม HUD บน Canvas) + edge glow
+2 ชั้น + board chrome + คลิกทุก node ดูรายละเอียด (clue = reliability/witnesses ผ่าน
+GetClueBoardHandler, npc witness = โซน + อาลิไบคร่าว ๆ จากเบาะแสที่เป็นพยาน — ไม่มี
+ground truth หลุด) + ปักหมุดหลาย node เทียบกันได้ (pin สูงสุด 3 การ์ด side-by-side,
+pin/ถอนจาก popup หรือปุ่ม × บนการ์ด, pin ของ node ที่หายถูกถอนอัตโนมัติ, pin รอดจาก
+ปิด/เปิดกระดานใน session เดียวกันผ่าน CluePinState singleton) + MCP get_pinned_clues
+(AI อ่าน pin เดียวกับ UI) + MCP set_pinned_clue (AI pin/unpin เอง — idempotent,
+validate กับกราฟ, main-thread mutate, AI pin ขึ้น UI ทันที) + dedupe ×N display-only
+สำหรับเบาะแสซ้ำใน alibi (MCP + view รูปเดียวกัน) — ดู [[clue-system-v2-presentation]])
+ก่อนหน้า 2026-09-14 (Clue System v2 ครบ 4 ส่วน (a)–(d): clue เป็น instance object
 (ClueInstance MessagePack + registry กลาง AllClueInstances) + pipeline กลาง ClueGenerationSystem
 (roll อิสระต่อ trigger ตาม weight, พยาน exclude ผู้ก่อเหตุ + player ไม่เป็นพยานตัวเอง,
 publish ClueGeneratedMessage ไม่มี ground truth) + hooks ครบ kill/explore(น้ำ/10%)/hunt(isHuntingTarget)
@@ -96,6 +108,21 @@ Microsoft.CodeAnalysis.CSharp/System.* 8 dll ที่ LegacyMigration ปิด
   ActionClueTriggerDef.csv 7 triggers + registry กลาง GameStateProvider.AllClueInstances +
   investigate_clue (ไม่มี param, VisibleToBystanders→ทันที/50%) + get_clue_board ClueBoardEntry
   (breaking, witness filter killer+IsAlive) + get_clue_graph (nodes/edges) + byte-scan info-hiding
+- [[clue-system-v2-presentation]] — Clue System v2 (e) (2026-09-15): Presentation layer ของ
+  clue board — ClueBoardPresenter (reuse GetClueGraphHandler ผ่าน MessagePipe interface,
+  ไม่สร้าง handler ใหม่) + ClueBoardView radial layout (clue วงใน r=150 / npc วงนอก r=300
+  เฉพาะตัวที่มี edge, เส้นเชื่อม Image หมุน + circle sprite gen ใน code) + view data contracts
+  ClueGraphNodeData/ClueGraphEdgeData (แยกจาก MessagePack GraphNode/GraphEdge) +
+  get_clue_graph MCP output เป็น human-readable text (ClueGraphTextFormat ร่วม bridge+Unity)
+  + ClueBoardPanel ใต้ Canvas ใน SampleScene (เริ่มซ่อน — Tab toggle ฝั่ง presenter ผ่าน
+  UniTask PlayerLoop + ปุ่ม HUD บน Canvas สำหรับผู้เล่นเมาส์) + edge glow 2 ชั้น
+  (radial-gradient beam เต้นช้า ๆ) + board chrome (backdrop/title/legend
+  raycastTarget=false) + คลิกทุก node → popup รายละเอียด (GraphNodeClickProxy ส่ง id →
+  presenter: clue ผ่าน GetClueBoardHandler reuse, npc witness = โซนปัจจุบัน
+  (player-visible) + อาลิไบคร่าว ๆ จากเบาะแสที่เป็นพยาน — คลิกซ้ำ toggle ปิด, node อื่น
+  สลับเนื้อหา, popup refresh ข้าม re-render, restore สีเดิมถูกตัวต่อ type) + PlayMode
+  tests A–F 6/6 PASS + Game view screenshot ยืนยัน layout ด้วย pixel-scan
+  (TestEvidence/clue-system-v2-e)
 
 ## 📄 Code Snippets
 
@@ -178,7 +205,10 @@ Microsoft.CodeAnalysis.CSharp/System.* 8 dll ที่ LegacyMigration ปิด
 - [[crafting]] — ระบบ Crafting และ recipes
 - [[exploration]] — ระบบ Exploration และ map
 - [[npc-director]] — ระบบ NPC Director (behavior, killer, no-witness rule)
-- [[deduction]] — ระบบ Social Deduction (clues, accusation, win/lose)
+- [[deduction]] — ระบบ Social Deduction (clues, accusation, win/lose) — มีส่วน
+  "AI Deduction Workflow" แนะนำลำดับการใช้ MCP tools (observe → collect → review →
+  pin/unpin ของ player+AI ผ่าน get_pinned_clues/set_pinned_clue → reason → accuse)
+  + สถานะอัปเดตแล้วตาม Clue System v2 (2026-09-15)
 - [[world-events]] — ระบบ World Events (Survival/Social groups)
 - [[chibi-avatar]] — ระบบ Chibi sprite-swap avatar
 

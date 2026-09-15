@@ -1,4 +1,4 @@
-=== CancelMoveHandler_StopsWalk_OldMoveSuperseded — 07:43:01 ===
+=== CancelMoveHandler_StopsWalk_OldMoveSuperseded — 09:23:09 ===
 [cancel_move] idle→not_moving; mid-walk cancel at (1.6,0.8) → move=superseded, zone=beach คงเดิม → PASS
 
 RESULT: PASS

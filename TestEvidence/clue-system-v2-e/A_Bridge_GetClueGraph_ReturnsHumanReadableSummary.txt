@@ -1,0 +1,7 @@
+=== Clue System v2 (e) Test A (bridge) — 09:23:06 ===
+[seed] investigate @ beach → 3a9d5714…
+[A] get_clue_graph output:
+Clue Graph \u2014 1 clue(s), 0 witness link(s):\r
+  \u0E04\u0E23\u0E32\u0E1A\u0E40\u0E25\u0E37\u0E2D\u0E14 \u2014 seen near: no one observed
+RESULT: PASS
+

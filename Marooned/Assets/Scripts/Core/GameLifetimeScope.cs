@@ -200,6 +200,12 @@ namespace Marooned.Core
             // Clue System v2 (c): investigate_clue — ค้น clue ที่ตำแหน่งปัจจุบันของ player
             // (empty request — ห้ามรับ LocationId จาก caller กันสำรวจข้ามโซน)
             builder.RegisterAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse, InvestigateClueHandler>(options);
+            // Clue System v2 (e) pin workspace: get_pinned_clues — อ่าน CluePinState singleton
+            // (state เดียวกับ UI กระดาน) + reuse GetClueBoardHandler ให้ filter/resolve เกิดที่เดียว
+            builder.Register<CluePinState>(Lifetime.Singleton).AsSelf();
+            builder.RegisterAsyncRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse, GetPinnedCluesHandler>(options);
+            // set_pinned_clue: AI pin/unpin เอง (explicit set semantics — idempotent, main-thread mutate)
+            builder.RegisterAsyncRequestHandler<SetPinnedClueRequest, SetPinnedClueResponse, SetPinnedClueHandler>(options);
 
             // --- UI root ---
             builder.RegisterEntryPoint<UIRoot>();
@@ -217,6 +223,14 @@ namespace Marooned.Core
             // UseCardHandler resolve ผ่าน IAsyncRequestHandler<UseCardRequest, UseCardResponse>
             // (register ไว้แล้วด้านบน) — ผลลัพธ์ Success/Failure แสดงผ่าน CardHandView.ShowFeedback
             builder.RegisterEntryPoint<CardHandPresenter>(Lifetime.Singleton).AsSelf();
+
+            // --- UI: Clue Board graph (Clue System v2 (e) — presentation layer) ---
+            // GetClueGraphHandler register ไว้แล้วด้านบน (RegisterAsyncRequestHandler) —
+            // ห้ามเพิ่มซ้ำ; ที่นี่เพิ่มเฉพาะ View (MonoBehaviour ใน scene ต้องมีจริง —
+            // ClueBoardPanel ใต้ Canvas ใน SampleScene) + Presenter (plain C# entry point,
+            // subscribe ClueGeneratedMessage → re-render + initial render ตอน Initialize)
+            builder.RegisterComponentInHierarchy<ClueBoardView>();
+            builder.RegisterEntryPoint<ClueBoardPresenter>(Lifetime.Singleton).AsSelf();
         }
 
         /// <summary>

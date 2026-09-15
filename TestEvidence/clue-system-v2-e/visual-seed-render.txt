@@ -1,0 +1,6 @@
+=== Clue Board visual seed — 05:39:22 ===
+[stage] player @ beach, witnesses: [npc_01, npc_02, npc_04]
+[seed #1] investigate: Success=True id=517839a1-cb3c-44b9-a9f8-f153e5f4e88b
+[seed #2] investigate: Success=True id=693708f9-9bd6-412c-994b-7435dd30a0c4
+[render] nodes=7 edges=10
+

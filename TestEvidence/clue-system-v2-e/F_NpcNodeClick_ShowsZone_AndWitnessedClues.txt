@@ -1,0 +1,7 @@
+=== Clue System v2 (e) Test F — 09:23:07 ===
+[F] popup text: npc_02 | โซน: beach • มีชีวิต
+พยานให้เบาะแสที่เก็บได้:
+- คราบเลือด @ beach ×4
+- รอยขีดข่วน @ beach
+RESULT: PASS
+

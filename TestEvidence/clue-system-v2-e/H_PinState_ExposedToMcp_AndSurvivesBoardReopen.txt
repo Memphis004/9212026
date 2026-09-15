@@ -1,0 +1,13 @@
+=== Clue System v2 (e) Test H — 09:23:07 ===
+[H] pinned: [3a9d5714-e651-488e-aaf6-63dd07fca761, npc_02]
+[H] RenderPinned output:
+Pinned Clues — 2 node(s) pinned (oldest first):
+  [clue] คราบเลือด (Strong) @ beach — seen near: no one observed
+  [npc] npc_02 | zone=beach • alive | witnessed: คราบเลือด @ beach ×4; รอยขีดข่วน @ beach
+[H] pins survived close/reopen: 2 cards redrawn from CluePinState
+[H] get_pinned_clues bridge output:
+Pinned Clues \u2014 2 node(s) pinned (oldest first):\r
+  [clue] \u0E04\u0E23\u0E32\u0E1A\u0E40\u0E25\u0E37\u0E2D\u0E14 (Strong) @ beach \u2014 seen near: no one observed\r
+  [npc] npc_02 | zone=beach \u2022 alive | witnessed: \u0E04\u0E23\u0E32\u0E1A\u0E40\u0E25\u0E37\u0E2D\u0E14 @ beach \u00D74; \u0E23\u0E2D\u0E22\u0E02\u0E35\u0E14\u0E02\u0E48\u0E27\u0E19 @ beach
+RESULT: PASS
+
