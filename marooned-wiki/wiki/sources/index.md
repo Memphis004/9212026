@@ -229,6 +229,10 @@ Microsoft.CodeAnalysis.CSharp/System.* 8 dll ที่ LegacyMigration ปิด
   บทเรียน infra (test runner wedge / orphan McpBridge / testClass filter) (2026-09-14)
 - [[npc-embodiment-movement]] — (architecture) Lab C Phase 2 Step 1-4 – NPC Embodiment + Basic AI Hook: data/movement/visual sync + InnocentUtilityAI/KillerPlanner (2026-09-10)
 
+## 🐛 Bug Log
+
+- [[clue-board-v2f-visual-bugs]] — Clue Board v2(f): HoverTooltip แสดงผลมุมล่างซ้ายแทนที่จะตามเมาส์ + ZoneHudText แสดงผลทับ Clue Board (2026-09-16)
+
 ## 🗂️ โครงสร้าง Wiki
 
 ```

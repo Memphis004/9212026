@@ -31,6 +31,10 @@
 - `ClueNodeDetail` / `NpcNodeDetail` view-data classes from presenter
 - Static formatters: `FormatClueTitle`, `FormatClueBody`, `FormatNpcTitle`, `FormatNpcBody` from view (replaced by `ClueGraphTextFormat.DedupeCounted`)
 
+### Known Issues
+- **BUG-1**: HoverTooltip shows at screen bottom-left instead of near the hovered node (coordinate mapping issue in `HoverTooltipView.FollowMouse`). See `marooned-wiki/wiki/sources/bug-log/clue-board-v2f-visual-bugs.md`.
+- **BUG-2**: ZoneHudText renders on top of Clue Board panel title (sibling order in Canvas hierarchy). Same file.
+
 ### Evidence
 - 11/11 PlayMode tests PASS (A–K, evidence 15:51 in `TestEvidence/clue-system-v2-f/`)
 
