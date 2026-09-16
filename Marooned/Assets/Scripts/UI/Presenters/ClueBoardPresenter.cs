@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using Marooned.Shared;
@@ -12,38 +13,47 @@ using VContainer.Unity;
 namespace Marooned.UI.Presenters
 {
     /// <summary>
-    /// MVP Lite presenter ของ clue board graph (Clue System v2 (e) — presentation layer):
-    /// subscribe ClueGeneratedMessage → re-render (Test C reactivity) + initial render
-    /// ตอน Initialize + poll Tab เปิด/ปิดกระดาน (toggle อยู่ฝั่ง presenter โดยเจตนา —
-    /// เมื่อ panel inactive View.Update() ไม่รัน poll ใน view จะเปิดคืนไม่ได้เลย)
-    /// + คลิก node → popup รายละเอียด: clue = เบาะแส (reuse GetClueBoardHandler —
-    /// witness filter เดียวกับ board), npc witness = โซนปัจจุบัน + อาลิไบคร่าว ๆ
-    /// (โซนจาก NpcState ที่ player เห็นจริงผ่าน chibi, อาลิไบ = เบาะแสที่คนนี้เป็นพยาน
-    /// จาก board entries ที่ผ่าน filter แล้ว — ไม่มี ground truth หลุดเข้า popup)
-    /// + ปักหมุดหลาย node (สูงสุด 3) เทียบกันแบบ side-by-side — pin list อยู่ใน
-    /// CluePinState (singleton — state เดียวกับที่ get_pinned_clues MCP tool อ่าน),
-    /// เนื้อหา resolve สดจาก board handler/npc director ทุก render
+    /// MVP Lite presenter ของ clue board drag-drop workspace (Clue System v2 (f)):
+    /// บน: GraphArea = เฉพาะ node ที่ pin — **นิยาม M(G) = {instance ใน G ที่ถูก pin} ∪
+    /// {instance ใน G ที่พยานโดย npc ที่ถูก pin}**; กลุ่ม G โผล่เมื่อ M(G) ไม่ว่าง
+    /// (×k, k=|M(G)|), npc N โผล่เมื่อ N ถูก pin หรือเป็นพยานของ instance ที่ pin,
+    /// edge (G,N) เมื่อมี entry ใน G ที่ N เป็นพยาน และ (e pin หรือ N pin)
+    /// ล่าง: คลัง 2 แถว (clue group ×N / npc portrait) — ลากขึ้นกราฟ = pin ทั้งกลุ่ม,
+    /// ลาก node ออกนอกกรอบ = unpin, hover = tooltip (ไม่มี click เหลืออยู่)
     ///
-    /// ⚠️ Reuse-only (Single Source of Truth): เรียก GetClueGraphHandler ที่มีอยู่แล้ว
-    /// ผ่าน interface MessagePipe — handler จัดการ witness filter (รวม player_local) ผ่าน
-    /// GetClueBoardHandler แล้ว ที่นี่แค่ map GraphNode/GraphEdge → view data แล้ว push ให้
-    /// ClueBoardView (passive) render — ห้าม filter/duplicate ตรรกะใหม่ที่นี่
+    /// pin มี 2 รูปแบบ: instance id (ลากการ์ดจากคลัง) และ group key "group:{DisplayName}"
+    /// (AI set_pinned_clue — graph node id = group key) — M(G) ขยาย group key = ทุก instance
+    /// ในกลุ่ม; prune/tooltip/unpin รองรับทั้งสองแบบ
+    ///
+    /// Reuse: GetClueGraphHandler/GetClueBoardHandler เดิม (witness filter ที่ handler),
+    /// ClueGraphTextFormat.DedupeCounted สำหรับรายการนับซ้ำ, CluePinState.Changed
+    /// เดิมเป็น single refresh path (player drag / AI set_pinned_clue / prune)
     /// </summary>
     public class ClueBoardPresenter : IInitializable, IDisposable
     {
         private readonly IAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse> _getClueGraphHandler;
         private readonly IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse> _getClueBoardHandler;
         private readonly NpcDirectorSystem _npcDirector;
+        private readonly GameStateProvider _stateProvider; // AllClueInstances — resolve DefId ตอนจับกลุ่ม
         private readonly CluePinState _pins;
         private readonly ClueBoardView _view;
         private readonly ISubscriber<ClueGeneratedMessage> _subscriber;
         private IDisposable _subscription;
         private CancellationTokenSource _toggleLoopCts;
 
+        /// <summary>groupKey → M(G) ล่าสุด (ใช้ resolve ตอน unpin กลุ่ม + tooltip clue)</summary>
+        private Dictionary<string, List<ClueBoardEntry>> _lastGroups = new();
+        /// <summary>board entries ล่าสุด (tooltip npc + ประกอบ M(G))</summary>
+        private List<ClueBoardEntry> _lastEntries = new();
+
+        private bool _rendering; // กัน render ซ้อน (PruneDead ยิง Changed กลาง render)
+        private bool _dirty;     // Changed ยิงระหว่าง render → รอบถัดไปต้อง render อีกครั้ง
+
         public ClueBoardPresenter(
             IAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse> getClueGraphHandler,
             IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse> getClueBoardHandler,
             NpcDirectorSystem npcDirector,
+            GameStateProvider stateProvider,
             CluePinState pins,
             ClueBoardView view,
             ISubscriber<ClueGeneratedMessage> subscriber)
@@ -51,6 +61,7 @@ namespace Marooned.UI.Presenters
             _getClueGraphHandler = getClueGraphHandler;
             _getClueBoardHandler = getClueBoardHandler;
             _npcDirector = npcDirector;
+            _stateProvider = stateProvider;
             _pins = pins;
             _view = view;
             _subscriber = subscriber;
@@ -59,21 +70,18 @@ namespace Marooned.UI.Presenters
         public void Initialize()
         {
             _subscription = _subscriber.Subscribe(_ => RenderAsync().Forget());
-            _view.NodeClicked += OnNodeClicked;
-            _view.PinRequested += TogglePin;
+            _view.LibraryCardDropped += OnLibraryCardDropped;
+            _view.GraphNodeUnpinRequested += OnGraphNodeUnpinRequested;
+            _view.NodeHoverEnter += OnNodeHoverEnter;
+            _view.NodeHoverExit += OnNodeHoverExit;
             _view.ToggleButtonPressed += TogglePanel;
             _pins.Changed += OnPinsChanged; // AI pin ผ่าน MCP → UI refresh ด้วย (path เดียวกับ player)
-            _view.EnsureToggleButton(); // ปุ่ม HUD บน Canvas — มองเห็น/กดได้แม้กระดานซ่อน
+            _view.EnsureToggleButton();
             _toggleLoopCts = new CancellationTokenSource();
             ToggleLoopAsync(_toggleLoopCts.Token).Forget();
-            RenderAsync().Forget(); // Initial render (panel เริ่มซ่อน — ข้อมูลพร้อมไว้ก่อนเปิด)
+            RenderAsync().Forget();
         }
 
-        /// <summary>
-        /// Poll Tab ผ่าน UniTask PlayerLoop (plain C# ไม่มี Update — pattern เดียวกับ
-        /// "UniTask ไม่ใช่ coroutine" ของโปรเจกต์); cancel ผ่าน CancellationTokenSource
-        /// ตอน Dispose — Forget กลืน OperationCanceledException ให้เอง
-        /// </summary>
         private async UniTaskVoid ToggleLoopAsync(CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
@@ -84,48 +92,268 @@ namespace Marooned.UI.Presenters
             }
         }
 
-        /// <summary>เปิด/ปิดกระดาน — เปิดทุกครั้ง render ใหม่ให้ข้อมูลสดจาก handler</summary>
+        /// <summary>เปิด/ปิดกระดาน — pin ค้างใน CluePinState (open ใหม่ render จาก state เดิม)</summary>
         public void TogglePanel()
         {
             var opening = !_view.gameObject.activeSelf;
             _view.gameObject.SetActive(opening);
             if (opening) RenderAsync().Forget();
-            else _view.HideNodeDetail(); // ปิด popup ค้างไว้ด้วย — เปิดใหม่ต้องไม่เห็นการ์ดเก่า
-            // (pin ค้างไว้ได้ — RenderAsync จะวาดแถว pin ใหม่จาก _pinnedNodeIds เอง)
+            else _view.HideTooltip(); // ปิด tooltip ค้าง — เปิดใหม่ต้องไม่เห็น
         }
 
-        /// <summary>UniTask (ไม่ใช่ UniTaskVoid) เพื่อให้ runtime tests await ผ่าน reflection ได้</summary>
+        /// <summary>
+        /// render หลัก — บรรทัดแรกทุกครั้ง: **prune stale pin** (pin id ที่ไม่มีจริงแล้ว
+        /// — ไม่อยู่ใน board entries และไม่อยู่ใน roster npc — กวาดทิ้งก่อนคำนวณ M(G))
+        /// </summary>
         private async UniTask RenderAsync()
         {
+            if (_rendering) { _dirty = true; return; }
+            _rendering = true;
             try
             {
-                var response = await _getClueGraphHandler.InvokeAsync(new GetClueGraphRequest());
+                var board = await _getClueBoardHandler.InvokeAsync(new GetClueBoardRequest());
+                _lastEntries = board.Entries ?? new List<ClueBoardEntry>();
 
-                var viewNodes = new List<ClueGraphNodeData>();
-                var viewEdges = new List<ClueGraphEdgeData>();
+                // ---- prune stale pin (ก่อน M(G) เสมอ — Test K) ----
+                // node ที่ยังมีจริง = instance บน board ∪ npc ใน roster ∪ group key ของกลุ่มที่ยังมี entry
+                // (group key = pin ระดับกลุ่มจาก set_pinned_clue — ถือว่า live ตราบใดที่กลุ่มยังมี entry)
+                var rosterIds = new HashSet<string>(_npcDirector.Npcs.Keys);
+                var liveGroupKeys = new HashSet<string>(
+                    ClueGroupUtil.GroupByDefId(_lastEntries, _stateProvider.AllClueInstances)
+                        .Select(GroupKey));
+                _pins.PruneDead(id =>
+                    _lastEntries.Any(e => e != null && e.InstanceId == id)
+                    || rosterIds.Contains(id)
+                    || liveGroupKeys.Contains(id));
 
-                // ⚠️ Field name จริงของ MessagePack classes: node.Label (ไม่ใช่ DisplayName),
-                // edge.From / edge.To (ไม่ใช่ SourceId/TargetId)
-                foreach (var node in response.Nodes)
-                    viewNodes.Add(new ClueGraphNodeData { Id = node.Id, Type = node.Type, Label = node.Label });
-
-                foreach (var edge in response.Edges)
-                    viewEdges.Add(new ClueGraphEdgeData { FromClueId = edge.From, ToNpcId = edge.To });
-
+                ComputeGraphModel(out var viewNodes, out var viewEdges);
+                _view.SetEdgeCache(viewEdges);
                 _view.RenderGraph(viewNodes, viewEdges);
 
-                // การ์ดปักหมุด: resolve สดจาก board handler/npc director ทุก render —
-                // pin ของ node ที่หายจากกราฟถูกถอนอัตโนมัติ (ข้อมูล stale ไม่ค้าง)
-                await RefreshPinnedAsync();
-
-                // popup เปิดค้างข้าม re-render → refresh ตาม type ของ node (ข้อมูลสดเสมอ)
-                var openId = _view.DetailNodeIdForTests;
-                if (openId != null) await ShowDetailAsync(openId);
+                // ---- คลัง 2 แถว: group ตาม DefId (×N) + npc roster (ids เท่านั้น) ----
+                var groups = ClueGroupUtil.GroupByDefId(_lastEntries, _stateProvider.AllClueInstances);
+                RenderClueLibrary(groups);
+                RenderNpcLibrary();
             }
             catch (Exception ex)
             {
                 Debug.LogError($"[ClueBoardPresenter] RenderAsync failed: {ex.Message}");
             }
+            finally
+            {
+                _rendering = false;
+            }
+            if (_dirty)
+            {
+                _dirty = false;
+                await RenderAsync(); // state เปลี่ยนระหว่าง render — วาดใหม่ด้วยข้อมูลล่าสุด
+            }
+        }
+
+        /// <summary>
+        /// คำนวณ M(G) แล้วแปลงเป็น view nodes/edges:
+        /// G = กลุ่ม DefId; M(G) = {e ∈ G : e pin} ∪ {e ∈ G : N witness ของ e โดย N pin}
+        /// </summary>
+        private void ComputeGraphModel(out List<ClueGraphNodeData> viewNodes, out List<ClueGraphEdgeData> viewEdges)
+        {
+            viewNodes = new List<ClueGraphNodeData>();
+            viewEdges = new List<ClueGraphEdgeData>();
+            _lastGroups = new Dictionary<string, List<ClueBoardEntry>>();
+
+            var groups = ClueGroupUtil.GroupByDefId(_lastEntries, _stateProvider.AllClueInstances);
+            var pinnedSet = new HashSet<string>(_pins.PinnedNodeIds);
+
+            // ตรวจ npc pin ที่มีจริง (pin ที่เป็น npc ต้องอยู่ใน roster — prune ทำแล้ว)
+            var pinnedNpcIds = pinnedSet.Where(_npcDirector.Npcs.ContainsKey).ToHashSet();
+
+            foreach (var g in groups)
+            {
+                var groupKey = GroupKey(g);
+                // pin ระดับกลุ่ม (AI set_pinned_clue ใช้ graph node id = group key) = ทุก instance ใน G ถูก pin
+                var groupPinned = pinnedSet.Contains(groupKey);
+                var mG = g.Instances.Where(e =>
+                        groupPinned
+                        || pinnedSet.Contains(e.InstanceId)
+                        || (e.WitnessNpcIds != null && e.WitnessNpcIds.Any(pinnedNpcIds.Contains)))
+                    .ToList();
+                _lastGroups[groupKey] = mG;
+                if (mG.Count == 0) continue;
+
+                var k = mG.Count;
+                var label = k > 1 ? $"{g.DisplayName} ×{k}" : g.DisplayName;
+                viewNodes.Add(new ClueGraphNodeData { Id = groupKey, Type = "clue", Label = label });
+
+                // edge (G,N) เมื่อมี e ∈ G ที่ N เป็นพยาน และ (e ถูก pin หรือ N ถูก pin):
+                //   (1) e ถูก pin → เส้นถึงพยานทุกตัวของ e (พยานเหล่านี้โผล่เพราะ e pin)
+                //   (2) N ถูก pin → เส้น (G,N) ถ้ามี e ใน G ที่ N เป็นพยาน
+                foreach (var e in mG)
+                {
+                    if (!(groupPinned || pinnedSet.Contains(e.InstanceId))) continue;
+                    foreach (var w in e.WitnessNpcIds ?? new List<string>())
+                        viewEdges.Add(new ClueGraphEdgeData { FromClueKey = groupKey, ToNpcId = w });
+                }
+                foreach (var npcId in pinnedNpcIds)
+                    if (g.Instances.Any(e => e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(npcId)))
+                        viewEdges.Add(new ClueGraphEdgeData { FromClueKey = groupKey, ToNpcId = npcId });
+            }
+
+            // npc nodes: pin เอง หรือเป็นปลายทางของ edge (พยานของ instance ที่ pin)
+            var edgeNpcIds = viewEdges.Select(e => e.ToNpcId).ToHashSet();
+            foreach (var npcId in pinnedNpcIds.Concat(edgeNpcIds).Distinct())
+                viewNodes.Add(new ClueGraphNodeData { Id = npcId, Type = "npc", Label = npcId });
+
+            // dedupe edge คู่ (G,N)
+            var seen = new HashSet<(string, string)>();
+            viewEdges = viewEdges.Where(e => seen.Add((e.FromClueKey, e.ToNpcId))).ToList();
+        }
+
+        private static string GroupKey(ClueGroup g) => $"group:{g.DisplayName}";
+
+        // ---- คลัง 2 แถว ----
+
+        private void RenderClueLibrary(List<ClueGroup> groups)
+        {
+            var cards = new List<ClueLibraryCardData>();
+            foreach (var g in groups)
+            {
+                if (g.Instances.Count == 0) continue;
+                cards.Add(new ClueLibraryCardData
+                {
+                    Key = GroupKey(g),
+                    DisplayName = g.DisplayName,
+                    Subtitle = g.Instances.Count > 1 ? $"×{g.Instances.Count} • {g.Reliability}" : g.Reliability,
+                    GroupNodeIds = g.Instances.Select(i => i.InstanceId).ToList(),
+                });
+            }
+            _view.RenderClueLibrary(cards);
+        }
+
+        private void RenderNpcLibrary()
+        {
+            // roster: ids เท่านั้น — ห้าม IsAlive (Locked decision 6: ไม่มี public death channel)
+            var cards = new List<ClueLibraryCardData>();
+            foreach (var npc in _npcDirector.Npcs.Values)
+            {
+                cards.Add(new ClueLibraryCardData
+                {
+                    Key = npc.Id,
+                    DisplayName = npc.Id,
+                    Subtitle = "", // จงใจว่าง — ไม่โชว์สถานะชีวิต
+                    GroupNodeIds = new List<string> { npc.Id },
+                });
+            }
+            _view.RenderNpcLibrary(cards);
+        }
+
+        // ---- drag events (player) ----
+
+        /// <summary>การ์ดคลังถูกปล่อยในกราฟ → pin ทุก instance ในกลุ่มที่ยังไม่ pin</summary>
+        private void OnLibraryCardDropped(List<string> ids)
+        {
+            if (ids == null || ids.Count == 0) return;
+            _pins.PinMany(ids.Where(id => !_pins.IsPinned(id)));
+            // render เกิดผ่าน Changed subscription เสมอ
+        }
+
+        /// <summary>
+        /// node ถูกลากออกนอกกรอบ → unpin เฉพาะสมาชิกที่ pinned อยู่ใน M(G) ของกลุ่มนั้น
+        /// (clue group node) หรือตัวมันเอง (npc node); ไม่มีสมาชิก pinned = no-op + log
+        /// </summary>
+        private void OnGraphNodeUnpinRequested(string nodeKey)
+        {
+            if (nodeKey != null && nodeKey.StartsWith("group:"))
+            {
+                var members = _lastGroups.TryGetValue(nodeKey, out var mG)
+                    ? mG.Where(e => _pins.IsPinned(e.InstanceId)).Select(e => e.InstanceId).ToList()
+                    : new List<string>();
+                if (_pins.IsPinned(nodeKey)) members.Add(nodeKey); // pin ระดับกลุ่ม (AI) → ถอนตัว key เองด้วย
+                if (members.Count == 0)
+                {
+                    Debug.Log($"[ClueBoardPresenter] unpin {nodeKey}: no pinned members (no-op)");
+                    return;
+                }
+                _pins.UnpinMany(members);
+                return;
+            }
+
+            // npc node
+            if (!_pins.IsPinned(nodeKey))
+            {
+                Debug.Log($"[ClueBoardPresenter] unpin {nodeKey}: not pinned (no-op)");
+                return;
+            }
+            _pins.Unpin(nodeKey);
+        }
+
+        // ---- hover tooltip (รายละเอียด — decision 3) ----
+
+        private void OnNodeHoverEnter(string key, string kind)
+        {
+            string text = null;
+            if (kind == "npc") text = BuildNpcTooltip(key);
+            else if (kind == "clue") text = BuildGroupTooltip(key);          // graph node — M(G) เท่านั้น
+            else if (kind == "clue_library") text = BuildClueTooltip(key);   // การ์ดคลัง — ทั้งกลุ่ม
+            if (text != null) _view.EnsureTooltipView().Show(text);
+        }
+
+        private void OnNodeHoverExit(string key, string kind) => _view.HideTooltip();
+
+        /// <summary>tooltip npc: รายการ "{DisplayName} @ {LocationId}" ที่คนนี้เป็นพยาน (×N dedupe)</summary>
+        private string BuildNpcTooltip(string npcId)
+        {
+            var witnessed = _lastEntries
+                .Where(e => e != null && e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(npcId))
+                .Select(e => $"{e.DisplayName} @ {e.LocationId}")
+                .ToList();
+            var lines = ClueGraphTextFormat.DedupeCounted(witnessed);
+            var zone = _npcDirector.Npcs.TryGetValue(npcId, out var npc) ? npc.CurrentLocationId : "?";
+            var body = lines.Count > 0 ? string.Join("\n", lines) : "ไม่มีเบาะแสที่เป็นพยาน";
+            return $"{npcId}\nโซน: {zone}\nเป็นพยาน:\n{body}";
+        }
+
+        /// <summary>tooltip clue group node: reliability + locations + พยาน — **จาก M(G) เท่านั้น**
+        /// (ชุดเดียวกับ ×k บนป้าย node — กันตัวเลขเถียงกันเองบนจอ)</summary>
+        private string BuildGroupTooltip(string groupKey)
+        {
+            if (!_lastGroups.TryGetValue(groupKey, out var mG) || mG.Count == 0)
+                return groupKey;
+
+            var g = ClueGroupUtil.GroupByDefId(_lastEntries, _stateProvider.AllClueInstances)
+                .FirstOrDefault(x => GroupKey(x) == groupKey);
+            if (g == null) return groupKey;
+
+            var locations = mG.Select(e => e.LocationId).Distinct().ToList();
+            // รายชื่อพยาน (raw ซ้ำได้ต่อ instance ใน M(G)) → DedupeCounted รวมเป็น "npc_02 ×3"
+            // — ตัวเลข = จำนวน instance ใน M(G) ที่คนนั้นเป็นพยาน (ชุดเดียวกับ ×k บนป้าย)
+            var witnesses = ClueGraphTextFormat.DedupeCounted(
+                mG.SelectMany(e => e.WitnessNpcIds ?? new List<string>()).ToList());
+            var rel = g.Reliability;
+            var k = mG.Count;
+            var body = $"ความน่าเชื่อถือ: {rel}\nพบที่: {string.Join(", ", locations)}\nพยาน (จากที่ pin):";
+            return $"{g.DisplayName} ×{k}\n{body}\n{(witnesses.Count > 0 ? string.Join("\n", witnesses) : "ไม่มีผู้เห็น")}";
+        }
+
+        /// <summary>tooltip การ์ด clue ในคลัง (key = group key) — ข้อมูลทั้งกลุ่ม (ทุก instance —
+        /// คลังเป็น catalog; ต่างจาก tooltip บน node ที่ใช้ M(G) เท่านั้น)</summary>
+        private string BuildClueTooltip(string key)
+        {
+            var g = ClueGroupUtil.GroupByDefId(_lastEntries, _stateProvider.AllClueInstances)
+                .FirstOrDefault(x => GroupKey(x) == key);
+            if (g == null) return key;
+            var instances = g.Instances;
+            var locations = instances.Select(e => e.LocationId).Distinct().ToList();
+            var witnesses = ClueGraphTextFormat.DedupeCounted(
+                instances.SelectMany(e => e.WitnessNpcIds ?? new List<string>()).ToList());
+            var body = $"ความน่าเชื่อถือ: {g.Reliability}\nพบที่: {string.Join(", ", locations)}\nพยาน:";
+            return $"{g.DisplayName} ×{instances.Count}\n{body}\n{(witnesses.Count > 0 ? string.Join("\n", witnesses) : "ไม่มีผู้เห็น")}";
+        }
+
+        /// <summary>CluePinState.Changed → re-render ทั้งกราฟ (player drag / AI set_pinned_clue / prune)
+        /// — render อยู่แล้ว = mark dirty (รอบนั้นอ่าน state ล่าสุดไม่ครบ — วาดใหม่หลังจบ)</summary>
+        private void OnPinsChanged()
+        {
+            if (_rendering) { _dirty = true; return; }
+            RenderAsync().Forget();
         }
 
         public void Dispose()
@@ -133,167 +361,13 @@ namespace Marooned.UI.Presenters
             _toggleLoopCts?.Cancel();
             _toggleLoopCts?.Dispose();
             _toggleLoopCts = null;
-            _view.NodeClicked -= OnNodeClicked;
-            _view.PinRequested -= TogglePin;
+            _view.LibraryCardDropped -= OnLibraryCardDropped;
+            _view.GraphNodeUnpinRequested -= OnGraphNodeUnpinRequested;
+            _view.NodeHoverEnter -= OnNodeHoverEnter;
+            _view.NodeHoverExit -= OnNodeHoverExit;
             _view.ToggleButtonPressed -= TogglePanel;
             _pins.Changed -= OnPinsChanged;
             _subscription?.Dispose();
-        }
-
-        // ---- คลิก node → popup รายละเอียด: clue จาก GetClueBoardHandler เดิม, npc = โซน + อาลิไบ ----
-
-        /// <summary>คลิก node เดิมที่ popup เปิดอยู่ = ปิด (toggle) — คลิกตัวใหม่ = เปลี่ยนเนื้อหา</summary>
-        private void OnNodeClicked(string nodeId)
-        {
-            if (_view.DetailNodeIdForTests == nodeId)
-            {
-                _view.HideNodeDetail();
-                return;
-            }
-            ShowDetailAsync(nodeId).Forget();
-        }
-
-        /// <summary>
-        /// แยก type ของ node: clue (มีใน board entries) → ClueNodeDetail,
-        /// ไม่งั้นลอง npc witness → NpcNodeDetail (โซน + เบาะแสที่เป็นพยาน)
-        /// </summary>
-        private async UniTask ShowDetailAsync(string nodeId)
-        {
-            try
-            {
-                var response = await _getClueBoardHandler.InvokeAsync(new GetClueBoardRequest());
-
-                ClueBoardEntry clueEntry = null;
-                foreach (var e in response.Entries)
-                    if (e != null && e.InstanceId == nodeId) { clueEntry = e; break; }
-
-                if (clueEntry != null)
-                {
-                    _view.ShowClueDetail(new ClueNodeDetail
-                    {
-                        InstanceId = clueEntry.InstanceId,
-                        Label = clueEntry.DisplayName,
-                        Reliability = clueEntry.Reliability,
-                        LocationId = clueEntry.LocationId,
-                        Witnesses = clueEntry.WitnessNpcIds,
-                    });
-                    return;
-                }
-
-                // npc witness: NpcState.CurrentLocationId = โซนที่ player เห็นจริง (chibi เดินอยู่)
-                if (!_npcDirector.Npcs.TryGetValue(nodeId, out var npc))
-                {
-                    _view.HideNodeDetail(); // node หายไประหว่างคลิก (clue ถูกถอน / npc ถูกลบ)
-                    return;
-                }
-
-                // "อาลิไบ" = เบาะแสที่เก็บได้ที่คนนี้เป็นพยาน (จาก entries ผ่าน filter แล้ว —
-                // การยืนยันว่าเห็น X @ Y หมายถึงตัวเองอยู่แถวนั้นตอนนั้นด้วย = alibi คร่าว ๆ
-                // ตามแนวคิด GDD "ระบบ alibi กลาง ๆ ให้ query")
-                var witnessed = new List<string>();
-                foreach (var e in response.Entries)
-                    if (e != null && e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(nodeId))
-                        witnessed.Add($"{e.DisplayName} @ {e.LocationId}");
-
-                _view.ShowNpcDetail(new NpcNodeDetail
-                {
-                    NpcId = nodeId,
-                    Zone = npc.CurrentLocationId,
-                    IsAlive = npc.IsAlive,
-                    WitnessedClues = witnessed,
-                });
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[ClueBoardPresenter] ShowDetailAsync failed: {ex.Message}");
-            }
-        }
-
-        // ---- Pin (ปักหมุดหลาย node เทียบกัน) — รายการอยู่ฝั่ง presenter, สูงสุด 3
-        //      (เกินจะตัดตัวเก่าสุด) เนื้อหา resolve สดทุก render เพื่อไม่ค้าง stale ----
-
-        /// <summary>ปัก/ถอนหมุด (จากปุ่มใน popup หรือ × บนการ์ด) — mutate state เดียว
-        /// (render ซ้ำเกิดผ่าน Changed subscription เสมอ — ครอบคลุม AI pin ผ่าน MCP ด้วย)</summary>
-        private void TogglePin(string nodeId) => _pins.Toggle(nodeId);
-
-        /// <summary>CluePinState.Changed → render แถว pin ใหม่จาก state (source เดียวสำหรับ
-        /// player คลิก / AI set_pinned_clue / PruneDead ตอน node หาย)</summary>
-        private void OnPinsChanged() => RefreshPinnedAsync().Forget();
-
-        /// <summary>
-        /// Resolve การ์ดปักหมุดสดจาก board handler/npc director แล้วส่งให้ view วาด —
-        /// pin ที่ node หายจากกราฟ (clue ถูกถอน/npc โดนลบ) ถูกถอนอัตโนมัติก่อนวาด
-        /// (รูปแบบข้อความผ่าน formatter ของ view — popup กับการ์ดใช้ format เดียวกัน)
-        /// </summary>
-        private async UniTask RefreshPinnedAsync()
-        {
-            try
-            {
-                // ถอน pin ของ node ที่ไม่อยู่ในกราฟแล้ว (ต้องทำก่อนวาด — กันการ์ดค้าง stale)
-                _pins.PruneDead(_view.HasNode);
-
-                if (_pins.PinnedNodeIds.Count == 0)
-                {
-                    _view.RenderPinned(null);
-                    return;
-                }
-
-                var response = await _getClueBoardHandler.InvokeAsync(new GetClueBoardRequest());
-                var cards = new List<PinnedCardData>();
-                foreach (var nodeId in _pins.PinnedNodeIds)
-                {
-                    ClueBoardEntry clueEntry = null;
-                    foreach (var e in response.Entries)
-                        if (e != null && e.InstanceId == nodeId) { clueEntry = e; break; }
-
-                    if (clueEntry != null)
-                    {
-                        var d = new ClueNodeDetail
-                        {
-                            InstanceId = clueEntry.InstanceId,
-                            Label = clueEntry.DisplayName,
-                            Reliability = clueEntry.Reliability,
-                            LocationId = clueEntry.LocationId,
-                            Witnesses = clueEntry.WitnessNpcIds,
-                        };
-                        cards.Add(new PinnedCardData
-                        {
-                            NodeId = d.InstanceId,
-                            Title = ClueBoardView.FormatClueTitle(d),
-                            Body = ClueBoardView.FormatClueBody(d),
-                        });
-                        continue;
-                    }
-
-                    // npc pin — ถ้า npc หายไปเอง (โดนลบ) ก็ข้าม (RenderPinned วาดเฉพาะที่เหลือ)
-                    if (!_npcDirector.Npcs.TryGetValue(nodeId, out var npc)) continue;
-
-                    var witnessed = new List<string>();
-                    foreach (var e in response.Entries)
-                        if (e != null && e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(nodeId))
-                            witnessed.Add($"{e.DisplayName} @ {e.LocationId}");
-
-                    var n = new NpcNodeDetail
-                    {
-                        NpcId = nodeId,
-                        Zone = npc.CurrentLocationId,
-                        IsAlive = npc.IsAlive,
-                        WitnessedClues = witnessed,
-                    };
-                    cards.Add(new PinnedCardData
-                    {
-                        NodeId = n.NpcId,
-                        Title = ClueBoardView.FormatNpcTitle(n),
-                        Body = ClueBoardView.FormatNpcBody(n),
-                    });
-                }
-
-                _view.RenderPinned(cards);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[ClueBoardPresenter] RefreshPinnedAsync failed: {ex.Message}");
-            }
         }
     }
 }

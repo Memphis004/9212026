@@ -1,0 +1,7 @@
+=== Clue System v2 (f) Test B — 16:06:59 ===
+[B] collected total = 6
+[B] group 'group:คราบเลือด' instances = 6
+[B] all 6 instances pinned — no cap eviction ✓
+[B] group node 'group:คราบเลือด' rendered
+RESULT: PASS
+

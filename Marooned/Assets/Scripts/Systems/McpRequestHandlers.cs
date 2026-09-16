@@ -416,8 +416,8 @@ namespace Marooned.Systems
                     };
                 }
 
-                // Toggle = set/unset เป๊ะ (state ก่อนหน้าตรงข้ามแล้ว) — pin เกิน 3
-                // ตัวเก่าสุดหลุดอัตโนมัติ (กติกาเดียวกับ player pin บนกระดาน)
+                // Toggle = set/unset เป๊ะ (state ก่อนหน้าตรงข้ามแล้ว) — ไม่มีเพดานจำนวน
+                // (redesign (f): workspace semantics — pin ได้เท่าไหร่ก็ได้)
                 _pins.Toggle(request.NodeId);
                 return new SetPinnedClueResponse
                 {

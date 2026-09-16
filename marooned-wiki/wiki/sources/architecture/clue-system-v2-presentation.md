@@ -1,8 +1,9 @@
-# Clue System v2 (e) — Presentation Layer (In-Game Graph View & MCP Polish)
+# Clue System v2 (f) — Drag-Drop Workspace + Libraries
 
-วันที่: 2026-09-15
-สถานะ: **implemented + PlayMode evidence ผ่านครบ 6/6** (A–F — TestEvidence/clue-system-v2-e/)
-+ **toggle (Tab ปุ่ม HUD) + visual polish + คลิกทุก node ดูรายละเอียด (clue = เบาะแส, npc = โซน + อาลิไบคร่าว ๆ)**
+วันที่: 2026-09-16
+สถานะ: **implemented + PlayMode evidence ผ่านครบ 11/11** (A–K — TestEvidence/clue-system-v2-f/)
+
+UI redesign: Graph workspace (drag-drop pin/unpin) + 2-row library (clue groups ×N + NPC portraits) + hover tooltips. Click/popup/pin-row ถูกลบหมด.
 
 บทความนี้ต่อจาก [[clue-system-v2]] (backend parts a–d) — รอบนี้คือ presentation layer
 เท่านั้น **ไม่มี handler/message ใหม่** ทุกอย่าง reuse จากของเดิม
@@ -165,8 +166,7 @@ GraphNodeClickProxy (IPointerClickHandler — pattern เดียวกับ C
 
 ## ปักหมุดหลาย node เทียบกัน (Pin Workspace)
 
-- ปุ่ม **[ปักหมุด]** ใน popup และปุ่ม **×** บนการ์ด pin ยิง event เดียวกัน (`PinRequested`)
-  — pin list อยู่ฝั่ง presenter (ordered, สูงสุด 3, เกินตัดตัวเก่าสุด) ตาม MVP Lite
+- ปุ่ม **[ปักหมุด]** ใน popup และปุ่ม **×** บนการ์ด pin ยิง event เดียวกัน (`PinRequested`)   — pin list อยู่ฝั่ง presenter (ordered, ไม่มีเพดาน) ตาม MVP Lite
 - การ์ด pin resolve ข้อมูลสดทุกครั้งผ่าน board handler / NpcDirectorSystem เหมือน popup
   — ไม่มี snapshot stale; pin ของ node ที่หายจากกราฟถูกถอนอัตโนมัติก่อนวาด (`HasNode` guard)
 - node ที่ถูก pin มี badge จุดทอง; การ์ดวางเรียงกันล่างกลาง (side-by-side) กันคลิกทะลุ
@@ -179,9 +179,9 @@ GraphNodeClickProxy (IPointerClickHandler — pattern เดียวกับ C
 
 ## get_pinned_clues (MCP) + CluePinState singleton + pin persistence
 
-- **CluePinState** (singleton, `Register<CluePinState>(Lifetime.Singleton)`): single source
-  of truth ของ ordered pin list (สูงสุด 3) — presenter เขียนผ่าน `Toggle`, handler อ่าน
-  `PinnedNodeIds`; มี `PruneDead` (ถอน pin ของ node ที่หายจากกราฟ) + `Clear` (round reset)
+- **CluePinState** (singleton, `Register<CluePinState>(Lifetime.Singleton)`): single source   of truth ของ ordered pin list — presenter เขียนผ่าน `Toggle`/`PinMany`/`UnpinMany`,
+   handler อ่าน `PinnedNodeIds`; มี `PruneDead` (ถอน pin ของ node ที่หายจากกราฟ) +
+   `Clear` (round reset); ไม่มีเพดาน (workspace semantics)
 - **Persistence across close/reopen**: pin list อยู่ใน singleton (ไม่ใช่ field ของ panel) —
   ปิดกระดาน (Tab/ปุ่ม) แค่ `SetActive(false)` + ซ่อน popup, เปิดใหม่ → `RenderAsync` →
   `RefreshPinnedAsync` วาดการ์ดจาก pin list เดิมให้เอง (Test H ยืนยัน)

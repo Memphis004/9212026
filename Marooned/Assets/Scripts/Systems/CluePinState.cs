@@ -4,10 +4,11 @@ using System.Collections.Generic;
 namespace Marooned.Systems
 {
     /// <summary>
-    /// Clue System v2 (e) pin workspace: single source of truth ของ ordered pin list
-    /// (สูงสุด 3, เกินตัดตัวเก่าสุด) — presenter เขียนผ่าน TogglePin, อ่านโดย
-    /// GetPinnedCluesHandler (get_pinned_clues MCP tool) เพื่อให้ AI VTuber เห็น
-    /// state เดียวกับที่กระดานในเกมแสดง
+    /// Clue System v2 (f) pin workspace: single source of truth ของ ordered pin list
+    /// — **ไม่มีเพดานจำนวนแล้ว** (เดิม MaxPinned = 3 ตัดตัวเก่าสุดอัตโนมัติ — ลบทิ้ง
+    /// ตาม redesign: ลากการ์ดกลุ่มขึ้นกราฟ = pin ทุก instance ในกลุ่มพร้อมกัน จำนวน
+    /// จึงโตตามเนื้อหาจริง) — presenter เขียนผ่าน Pin/Unpin, อ่านโดย
+    /// GetPinnedCluesHandler (get_pinned_clues MCP tool)
     ///
     /// ⚠️ ไม่ใช่ MessagePack class — state ฝั่ง Unity เท่านั้น (single-process);
     /// ฝั่ง bridge อ่านผ่าน GetPinnedCluesRequest/Response ทาง TCP
@@ -16,30 +17,52 @@ namespace Marooned.Systems
     {
         /// <summary>node ids เรียงตามลำดับ pin (เก่าสุดก่อน)</summary>
         private readonly List<string> _pinnedNodeIds = new();
-        public const int MaxPinned = 3;
 
-        /// <summary>เนื้อหา popup/pin-card ใช้ presenter เป็นคนเขียนเสมอ — อ่านกลับได้ (tests)</summary>
+        /// <summary>เนื้อหา UI/MCP ใช้ presenter เป็นคนเขียนเสมอ — อ่านกลับได้ (tests)</summary>
         public IReadOnlyList<string> PinnedNodeIds => _pinnedNodeIds;
 
         public event Action Changed;
 
-        /// <summary>pin อยู่แล้ว = ถอน (คืน false = unpinned) — ไม่อยู่ = ปัก (เกิน 3 ตัดตัวเก่าสุด, คืน true)</summary>
+        /// <summary>pin ทีเดียวหลาย id (กลุ่มจากการ์ดคลัง / set_pinned_clue) — ข้ามที่ pin อยู่แล้ว;
+        /// คืนจำนวนที่เพิ่มจริง; ยิง Changed ครั้งเดียว</summary>
+        public int PinMany(IEnumerable<string> nodeIds)
+        {
+            var added = 0;
+            foreach (var id in nodeIds)
+            {
+                if (string.IsNullOrEmpty(id) || _pinnedNodeIds.Contains(id)) continue;
+                _pinnedNodeIds.Add(id);
+                added++;
+            }
+            if (added > 0) Changed?.Invoke();
+            return added;
+        }
+
+        /// <summary>pin ตัวเดียว (set_pinned_clue ใช้ Toggle เดิมอยู่ — คงไว้ให้ครบมือ)</summary>
+        public void Pin(string nodeId) => PinMany(new[] { nodeId });
+
+        /// <summary>ถอนทีเดียวหลาย id (ลาก node กลุ่มออกนอกกราฟ) — คืนจำนวนที่ถอนจริง;
+        /// ยิง Changed ครั้งเดียว</summary>
+        public int UnpinMany(IEnumerable<string> nodeIds)
+        {
+            var removed = 0;
+            foreach (var id in nodeIds)
+                removed += _pinnedNodeIds.Remove(id) ? 1 : 0;
+            if (removed > 0) Changed?.Invoke();
+            return removed;
+        }
+
+        /// <summary>ถอนตัวเดียว</summary>
+        public void Unpin(string nodeId) => UnpinMany(new[] { nodeId });
+
+        /// <summary>เข้า-ออก toggle (ปุ่มในเกม / AI tool) — คืน true = ตอนจบคือ pinned</summary>
         public bool Toggle(string nodeId)
         {
             if (string.IsNullOrEmpty(nodeId)) return false;
-
-            if (_pinnedNodeIds.Remove(nodeId))
-            {
-                Changed?.Invoke();
-                return false; // unpinned
-            }
-
+            if (_pinnedNodeIds.Remove(nodeId)) { Changed?.Invoke(); return false; }
             _pinnedNodeIds.Add(nodeId);
-            if (_pinnedNodeIds.Count > MaxPinned)
-                _pinnedNodeIds.RemoveAt(0); // ตัวเก่าสุดหลุดอัตโนมัติ
-
             Changed?.Invoke();
-            return true; // pinned
+            return true;
         }
 
         /// <summary>ล้าง pin ทั้งหมด (round reset / test isolation)</summary>
@@ -52,7 +75,7 @@ namespace Marooned.Systems
 
         public bool IsPinned(string nodeId) => _pinnedNodeIds.Contains(nodeId);
 
-        /// <summary>ถอน pin ของ node ที่หายจากกราฟแล้ว (clue ถูกถอน/npc โดนลบ) — presenter เรียกตอน render</summary>
+        /// <summary>ถอน pin ของ node ที่หายจากเกมแล้ว — presenter เรียกตอน render (Test K)</summary>
         public void PruneDead(Func<string, bool> nodeExistsInGraph)
         {
             var before = _pinnedNodeIds.Count;

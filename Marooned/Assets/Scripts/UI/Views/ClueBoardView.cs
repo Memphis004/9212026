@@ -11,181 +11,155 @@ namespace Marooned.UI.Views
 {
     /// <summary>
     /// View-layer node data — แยกจาก MessagePack classes (GraphNode) โดยเจตนา
-    /// (Data Separation: Presenter map GraphNode → ClueGraphNodeData, View ไม่รู้จัก
-    /// MessagePack shape) — ไม่มี [MessagePackObject]
+    /// (Data Separation) — ไม่มี [MessagePackObject]
+    /// (f) redesign: node key = instance id แทน / npc id / "group:{DisplayName}"
+    /// (clue วาดเป็นตัวแทนกลุ่ม — 1 node ต่อกลุ่ม DefId)
     /// </summary>
     public class ClueGraphNodeData
     {
-        public string Id;
-        public string Type;    // "clue" หรือ "npc" (View ใช้แยกวงใน/วงนอก)
+        public string Id;      // node key (ดูข้างบน)
+        public string Type;    // "clue" หรือ "npc"
         public string Label;   // Text ที่จะแสดงบน Node
     }
 
-    /// <summary>View-layer edge data — map จาก GraphEdge.From/To ฝั่ง Presenter</summary>
+    /// <summary>View-layer edge data — (f): เชื่อมกลุ่ม clue → npc (dedupe คู่ (G,N) แล้ว)</summary>
     public class ClueGraphEdgeData
     {
-        public string FromClueId;
+        public string FromClueKey;  // "group:{DisplayName}"
         public string ToNpcId;
         public string Relation = "witnessed";
     }
 
-    /// <summary>
-    /// View-layer detail data ของ clue (คลิก node → popup) — map จาก ClueBoardEntry
-    /// ฝั่ง Presenter (handler เป็นคน filter witness แล้ว) — ไม่มี [MessagePackObject]
-    /// เหมือน data contract ตัวอื่นของ view (Data Separation)
-    /// </summary>
-    public class ClueNodeDetail
-    {
-        public string InstanceId;
-        public string Label;
-        public string Reliability;
-        public string LocationId;
-        public List<string> Witnesses = new();
-    }
+    /// <summary>View-layer การ์ดคลัง 1 ใบ — นิยามใน NpcPortraitResolver.cs (ClueLibraryCardData)
+    /// — ไม่มี [MessagePackObject] (Data Separation)</summary>
 
     /// <summary>
-    /// View-layer detail data ของ npc witness (คลิก node → popup) — map ฝั่ง Presenter:
-    /// โซน/สถานะมาจาก NpcState (player เห็น chibi เดินอยู่จริง — ไม่ใช่ ground truth แอบแฝง)
-    /// ส่วน "อาลิไบ" = เบาะแสที่ npc คนนี้เป็นพยาน (จาก ClueBoardEntry ที่ผ่าน filter แล้ว —
-    /// บอกได้ว่า "ยืนยันว่าเห็น X ที่ Y" ซึ่งสอดคล้อง GDD แนวคิด alibi แบบกลาง ๆ)
-    /// </summary>
-    public class NpcNodeDetail
-    {
-        public string NpcId;
-        public string Zone;                    // CurrentLocationId ปัจจุบัน (player-visible)
-        public bool IsAlive;
-        public List<string> WitnessedClues = new(); // ข้อความ "<label> @ <location>" ต่อเบาะแส
-    }
-
-    /// <summary>
-    /// View-layer ข้อมูลการ์ดปักหมุด (pin) — Presenter เรียงจาก pinned ids แล้ว map
-    /// เป็น Title/Body ผ่าน formatter ของ View (format เดียวกับ popup) — ไม่มี
-    /// [MessagePackObject] เหมือน data contract ตัวอื่นของ view (Data Separation)
-    /// </summary>
-    public class PinnedCardData
-    {
-        public string NodeId;
-        public string Title;
-        public string Body;
-    }
-
-    /// <summary>
-    /// Detective-board style layout ของ clue graph (Clue System v2 (e) — presentation layer):
-    /// Clue nodes เรียงวงกลมชั้นใน, NPC witness nodes วงนอก (เฉพาะตัวที่มี edge เชื่อม),
-    /// เส้นเชื่อม clue → npc (Image บางๆ หมุนให้ชี้จาก clue ไปหา npc)
+    /// Detective drag-drop workspace (Clue System v2 (f) — FULL REDESIGN):
+    /// บน: GraphArea = เฉพาะ node ที่ pin (ลากจัดตำแหน่ง, ลากออกนอกกรอบ = unpin)
+    /// ล่าง: ScrollView แนวนอน 2 แถว = คลังการ์ดเบาะแส (group ×N) + คลัง NPC (portrait)
+    /// รายละเอียดทั้งหมด = hover tooltip กลางตัวเดียว (ไม่มี popup/click เหลืออยู่)
     ///
-    /// MVP Lite: passive — Presenter เรียก RenderGraph(nodes, edges) เท่านั้น
-    /// (ไม่รู้จัก GetClueGraphHandler / MessagePack — รับแต่ view data)
+    /// MVP Lite: passive — Presenter เรียก RenderGraph/RenderClueLibrary/RenderNpcLibrary
+    /// (ไม่รู้จัก handler / MessagePack — รับแต่ view data)
     ///
     /// ⚠️ Sprite: CreateCircleSprite ของ WorldItemSystem เป็น private — copy logic
-    /// สร้าง Texture2D วงกลมมาเป็น private method ของคลาสนี้ (spec Step 4)
+    /// สร้าง Texture2D วงกลมมาเป็น private method ของคลาสนี้ (spec Step 4 เดิม)
     /// </summary>
     public class ClueBoardView : MonoBehaviour
     {
         [SerializeField] private Transform clueBoardContainer; // root ของ graph (auto-create ถ้าไม่ผูก)
 
-        private readonly Dictionary<string, RectTransform> _nodeRects = new(); // node id → rect
-        private readonly Dictionary<string, Image> _nodeImages = new();        // node id → image (highlight ตอนเลือก)
-        private readonly List<GameObject> _spawned = new();                    // nodes+edges ทั้งหมด (clear ตอน re-render)
+        private readonly Dictionary<string, RectTransform> _nodeRects = new(); // node key → rect
+        private readonly List<GameObject> _spawned = new();                    // nodes+edges (clear ตอน re-render)
         private readonly List<Image> _edgeGlowImages = new();                  // glow layer ของแต่ละ edge (pulse ใน Update)
+        private readonly List<GameObject> _libraryCards = new();               // การ์ดคลังทั้ง 2 แถว
 
         private Sprite _nodeSprite;
         private Sprite _edgeGlowSprite;
         private TMP_FontAsset _labelFont;
         private Transform _container;
         private bool _backgroundReady;
+        private bool _libraryReady;
+        private bool _tooltipReady;
 
-        /// <summary>MVP Lite: คลิก node (clue หรือ npc) → ส่งต่อ id ให้ Presenter ตัดสินใจ (ผูกจาก GraphNodeClickProxy)</summary>
-        public event Action<string> NodeClicked;
-
-        /// <summary>MVP Lite: ปุ่ม HUD (มุมจอ) ถูกกด → Presenter เป็นคน TogglePanel (View passive)</summary>
+        // ---- MVP Lite events — View ส่งต่อ key/id เท่านั้น, Presenter ตัดสินใจ ----
+        /// <summary>การ์ดคลังถูกลากมาปล่อยในกราฟ → pin ทุก instance ในกลุ่ม</summary>
+        public event Action<List<string>> LibraryCardDropped;
+        /// <summary>node ถูกลากออกนอกกรอบกราฟ → unpin (กลุ่ม ถ้า clue)</summary>
+        public event Action<string> GraphNodeUnpinRequested;
+        /// <summary>hover เข้า การ์ดคลัง/node → Presenter ประกอบเนื้อหา tooltip (key, kind)</summary>
+        public event Action<string, string> NodeHoverEnter;
+        /// <summary>hover ออก → ซ่อน tooltip</summary>
+        public event Action<string, string> NodeHoverExit;
+        /// <summary>MVP Lite: ปุ่ม HUD (มุมจอ) ถูกกด → Presenter เป็นคน TogglePanel</summary>
         public event Action ToggleButtonPressed;
 
-        /// <summary>MVP Lite: ขอปัก/ถอนหมุด node → Presenter เป็นคน toggle รายการ (จากปุ่มใน popup + ปุ่ม × บนการ์ด)</summary>
-        public event Action<string> PinRequested;
-
-        private RectTransform _detailRoot;   // popup card (สร้าง lazy ครั้งแรกที่เปิด — sibling ท้าย = วาดทับ node)
-        private TMP_Text _detailTitle;
-        private TMP_Text _detailBody;
-        private string _detailNodeId;        // node ที่ popup กำลังโชว์ (null = ปิด)
-        private Image _selectedImage;        // node ที่ถูก highlight ตอน popup เปิด
-        private Color _selectedOriginalColor; // สีเดิมของ node ที่เลือก (clue=แดง, npc=น้ำเงิน — restore ถูกตัว)
-        private Color _selectedNodeColor;     // สี selected ปัจจุบัน (re-apply ข้าม re-render)
-        private bool _toggleButtonReady;     // HUD button สร้างแล้ว (idempotent)
-
-        private RectTransform _pinRow;                              // แถวการ์ดปักหมุด (ล่างกลาง panel)
-        private readonly Dictionary<string, GameObject> _pinCards = new();   // nodeId → card GO
-        private readonly Dictionary<string, Image> _pinBadges = new();       // nodeId → badge จุดทองบน node
-        private Button _pinButton;                                  // ปุ่ม [ปักหมุด] ใน popup
+        private bool _toggleButtonReady; // HUD button สร้างแล้ว (idempotent)
+        private HoverTooltipView _tooltip;
+        private GraphDropZone _dropZone;
 
         // ---- Layout constants ----
-        private const float InnerRadius = 150f;         // วงใน: clue nodes
-        private const float OuterRadius = 300f;         // วงนอก: npc witness nodes
-        private const float ClueNodeSize = 110f;
+        private const float GraphTopInset = 90f;        // พื้นที่กราฟ (บน) — เว้นหัวเรื่อง
+        private const float LibraryRowHeight = 130f;    // แถวคลัง (ล่าง)
+        private const float LibraryBottomOffset = 64f;
+        private const float GroupNodeSize = 110f;
         private const float NpcNodeSize = 80f;
+        private const float DefaultSpreadX = 420f;      // default radial ในกราฟ (ก่อนผู้เล่นลากเอง)
+        private const float DefaultSpreadY = 130f;
         private const float EdgeThickness = 4f;
-        private const float EdgeGlowSpread = 10f;       // glow ยื่นออกรอบ core (px)
-        private const float GlowPulseSpeed = 2.2f;      // จังหวะเต้นของ glow (rad/s)
-        private const float GlowPulseAmplitude = 0.15f; // ช่วง alpha ที่เต้น
-        private static readonly Color ClueNodeColor = new Color(0.85f, 0.35f, 0.30f);      // แดงอิฐ (clue)
-        private static readonly Color ClueNodeSelectedColor = new Color(1f, 0.62f, 0.55f); // แดงอิฐสว่าง (node ที่เลือก)
-        private static readonly Color NpcNodeSelectedColor = new Color(0.62f, 0.82f, 1f);  // น้ำเงินสว่าง (npc ที่เลือก)
-        private static readonly Color NpcNodeColor = new Color(0.35f, 0.60f, 0.85f);  // น้ำเงิน (npc)
-        private static readonly Color EdgeCoreColor = new Color(1f, 0.95f, 0.78f, 0.95f); // core เส้นสว่าง
-        private static readonly Color EdgeGlowColor = new Color(1f, 0.82f, 0.35f, 0.35f); // ทอง (alpha เต้นตามเวลา)
-        private static readonly Color BoardColor = new Color(0.12f, 0.10f, 0.09f, 0.92f); // พื้นกระดานเข้ม
-        private static readonly Color TitleColor = new Color(0.92f, 0.88f, 0.80f, 1f);    // parchment
+        private const float EdgeGlowSpread = 10f;
+        private const float GlowPulseSpeed = 2.2f;
+        private const float GlowPulseAmplitude = 0.15f;
+        private static readonly Color ClueNodeColor = new Color(0.85f, 0.35f, 0.30f);
+        private static readonly Color NpcNodeColor = new Color(0.35f, 0.60f, 0.85f);
+        private static readonly Color EdgeCoreColor = new Color(1f, 0.95f, 0.78f, 0.95f);
+        private static readonly Color EdgeGlowColor = new Color(1f, 0.82f, 0.35f, 0.35f);
+        private static readonly Color BoardColor = new Color(0.12f, 0.10f, 0.09f, 0.92f);
+        private static readonly Color TitleColor = new Color(0.92f, 0.88f, 0.80f, 1f);
+        private static readonly Color CardBgColor = new Color(0.16f, 0.14f, 0.12f, 0.95f);
+        private static readonly Color LibraryBgColor = new Color(0.10f, 0.09f, 0.08f, 0.85f);
 
-        /// <summary>จำนวน node ที่ render ล่าสุด (ใช้โดย runtime tests เป็นหลักฐาน)</summary>
+        /// <summary>node key → ตำแหน่งที่ผู้เล่นลากไว้ (คงอยู่ข้าม re-render — Test H)</summary>
+        private readonly Dictionary<string, Vector2> _customPositions = new();
+
+        /// <summary>จำนวน node ที่ render ล่าสุด (runtime tests)</summary>
         public int RenderedNodeCount => _nodeRects.Count;
 
         /// <summary>จำนวน edge ที่ render ล่าสุด (runtime tests)</summary>
         public int RenderedEdgeCount { get; private set; }
 
-        /// <summary>popup รายละเอียดกำลังเปิดจริงใน hierarchy ไหม (board ซ่อน = false)</summary>
-        public bool IsDetailVisible => _detailRoot != null && _detailRoot.gameObject.activeInHierarchy;
-
-        /// <summary>node id ที่ popup เปิดอยู่ (clue instance id หรือ npc id; null = ปิด) — runtime tests</summary>
-        public string DetailNodeIdForTests => _detailNodeId;
-
-        /// <summary>ข้อความใน popup แบบรวม (title | body) — runtime tests assert โดยไม่แตะ TMP</summary>
-        public string DetailTextForTests => _detailTitle != null && _detailBody != null
-            ? _detailTitle.text + " | " + _detailBody.text
-            : string.Empty;
-
-        /// <summary>node นี้อยู่ในกราฟที่ render ล่าสุดไหม (presenter ใช้ตัด pin ที่ node หายไป)</summary>
-        public bool HasNode(string nodeId) => _nodeRects.ContainsKey(nodeId);
-
-        /// <summary>container ที่ใช้จริง (runtime tests — ตรวจว่าอยู่ใต้ Canvas)</summary>
+        /// <summary>container ที่ใช้จริง (runtime tests)</summary>
         public Transform ContainerForTests => _container;
 
-        /// <summary>จำนวนการ์ดปักหมุดที่แสดงอยู่ — runtime tests</summary>
-        public int PinnedCardCountForTests => _pinCards.Count;
+        /// <summary>dropzone ของ GraphArea (runtime tests — simulate ลากออกนอกกรอบ)</summary>
+        public RectTransform DropZoneRectForTests => _dropZoneRect;
+        private RectTransform _dropZoneRect;
 
-        /// <summary>ปุ่ม [ปักหมุด] ใน popup (test กดผ่าน ExecuteEvents ตาม path เดียวกับเกม)</summary>
-        public Button PinButtonForTests => _pinButton;
+        /// <summary>การ์ดคลัง clue ทั้งหมด (runtime tests)</summary>
+        public IReadOnlyList<GameObject> ClueLibraryCardsForTests => _clueLibraryCards;
+        private readonly List<GameObject> _clueLibraryCards = new();
 
-        /// <summary>ปุ่ม × ปิดของการ์ดปักหมุดที่ระบุ — runtime tests (คืน false ถ้าไม่มีการ์ดนั้น)</summary>
-        public bool TryGetPinCardCloseForTests(string nodeId, out Button close)
+        /// <summary>การ์ดคลัง NPC ทั้งหมด (runtime tests)</summary>
+        public IReadOnlyList<GameObject> NpcLibraryCardsForTests => _npcLibraryCards;
+        private readonly List<GameObject> _npcLibraryCards = new();
+
+        /// <summary>node นี้อยู่ในกราฟที่ render ล่าสุดไหม (presenter ใช้ประกอบ tooltip ฯลฯ)</summary>
+        public bool HasNode(string nodeKey) => _nodeRects.ContainsKey(nodeKey);
+
+        /// <summary>ข้อความ tooltip กลาง (runtime tests — assert เนื้อหา; string เพื่อไม่ผูก test asmdef กับ TMPro)</summary>
+        public string TooltipTextForTests => _tooltip != null ? _tooltip.GetTextForTests() : null;
+        private TMP_Text _tooltipText;
+
+        /// <summary>scroll content ของแถวคลัง (runtime tests — Test C ปัดเลื่อน)</summary>
+        public RectTransform ClueScrollContentForTests => _clueScrollContent;
+        private RectTransform _clueScrollContent;
+        public RectTransform NpcScrollContentForTests => _npcScrollContent;
+        private RectTransform _npcScrollContent;
+
+        /// <summary>การ์ดคลังจาก key (runtime tests — simulate drag/hover)</summary>
+        public GameObject FindLibraryCardForTests(string key)
         {
-            close = null;
-            return _pinCards.TryGetValue(nodeId, out var card)
-                && card != null
-                && card.transform.Find("CloseBtn") != null
-                && card.transform.Find("CloseBtn").TryGetComponent(out close);
+            foreach (var go in _clueLibraryCards) if (go != null && go.name == $"LibCard_{key}") return go;
+            foreach (var go in _npcLibraryCards) if (go != null && go.name == $"LibCard_{key}") return go;
+            return null;
         }
 
-        /// <summary>
-        /// Re-render ทั้งกราฟ: ClearAll → spawn node วงใน/วงนอก → วาดเส้นเชื่อม
-        /// (เรียกซ้ำได้ปลอดภัย — ใช้เป็นกลไก reactivity เมื่อเกิด clue ใหม่)
-        /// </summary>
+        /// <summary>GraphNodeDragProxy ของ node ในกราฟ (runtime tests — simulate ลาก/ลากออก)</summary>
+        public GraphNodeDragProxy GetNodeProxyForTests(string nodeKey)
+        {
+            if (_nodeRects.TryGetValue(nodeKey, out var rt))
+                return rt.GetComponent<GraphNodeDragProxy>();
+            return null;
+        }
+
+        /// <summary>Re-render ทั้งกราฟ: ClearAll → spawn node ที่ pin (custom pos ก่อน radial)
+        /// → วาดเส้น (dedupe แล้ว) — เรียกซ้ำได้ปลอดภัย (reactivity จาก ClueGeneratedMessage)</summary>
         public void RenderGraph(List<ClueGraphNodeData> nodes, List<ClueGraphEdgeData> edges)
         {
-            EnsureBackground(); // chrome (พื้น/หัวเรื่อง/legend) ต้องมีเสมอ — แม้กราฟว่าง
+            EnsureBackground();
+            EnsureGraphArea();
             ClearAll();
-            if (nodes == null || nodes.Count == 0) return;
-
-            EnsureContainer();
+            if (nodes == null || nodes.Count == 0) { RenderedEdgeCount = 0; return; }
 
             var clues = new List<ClueGraphNodeData>();
             var npcs = new List<ClueGraphNodeData>();
@@ -193,31 +167,25 @@ namespace Marooned.UI.Views
             {
                 if (n == null || string.IsNullOrEmpty(n.Id)) continue;
                 if (n.Type == "npc") npcs.Add(n);
-                else clues.Add(n); // "clue" หรือ type แปลกๆ → วงใน (safe default)
+                else clues.Add(n);
             }
 
-            // NPC เฉพาะตัวที่มี edge เชื่อม (spec Step 4.2)
-            var linkedNpcIds = new HashSet<string>();
-            if (edges != null)
-                foreach (var e in edges)
-                    if (!string.IsNullOrEmpty(e?.ToNpcId)) linkedNpcIds.Add(e.ToNpcId);
-            npcs.RemoveAll(n => !linkedNpcIds.Contains(n.Id));
-
-            // ---- วงใน: clue nodes (radius 150) ----
+            // ---- clue group nodes: custom position ก่อน (ผู้เล่นลากไว้) → default เป็นแถวโค้ง ----
             for (var i = 0; i < clues.Count; i++)
             {
-                var angle = 360f * i / Mathf.Max(clues.Count, 1) - 90f;
-                var pos = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * InnerRadius;
-                SpawnNode(clues[i], pos, ClueNodeSize, ClueNodeColor);
+                var pos = _customPositions.TryGetValue(clues[i].Id, out var saved)
+                    ? saved
+                    : DefaultCluePosition(i, clues.Count);
+                SpawnNode(clues[i], pos, GroupNodeSize, ClueNodeColor);
             }
 
-            // ---- วงนอก: npc nodes (radius 300) — จัดมุมตาม clue แรกที่เชื่อมถึง ----
+            // ---- npc nodes: จัดมุมตาม clue แรกที่เชื่อมถึง (radial default) ----
             var npcAngle = new Dictionary<string, float>();
             if (edges != null)
                 foreach (var e in edges)
                 {
-                    if (e?.FromClueId == null || !linkedNpcIds.Contains(e.ToNpcId)) continue;
-                    if (_nodeRects.TryGetValue(e.FromClueId, out var clueRect) && !npcAngle.ContainsKey(e.ToNpcId))
+                    if (e?.FromClueKey == null) continue;
+                    if (_nodeRects.TryGetValue(e.FromClueKey, out var clueRect) && !npcAngle.ContainsKey(e.ToNpcId))
                         npcAngle[e.ToNpcId] = Mathf.Atan2(
                             clueRect.anchoredPosition.y, clueRect.anchoredPosition.x) * Mathf.Rad2Deg;
                 }
@@ -227,54 +195,63 @@ namespace Marooned.UI.Views
                 var angle = npcAngle.TryGetValue(npcs[i].Id, out var a)
                     ? a
                     : 360f * i / Mathf.Max(npcs.Count, 1) - 90f;
-                var pos = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * OuterRadius;
+                var pos = _customPositions.TryGetValue(npcs[i].Id, out var saved)
+                    ? saved
+                    : new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * 260f;
                 SpawnNode(npcs[i], pos, NpcNodeSize, NpcNodeColor);
             }
 
-            // ---- เส้นเชื่อม clue → npc ----
+            // ---- เส้นเชื่อม (dedupe คู่ (G,N) ทำที่ Presenter แล้ว — วาดตรงนี้) ----
+            var drawn = 0;
             if (edges != null)
                 foreach (var e in edges)
                     if (e != null
-                        && _nodeRects.TryGetValue(e.FromClueId, out var from)
+                        && _nodeRects.TryGetValue(e.FromClueKey, out var from)
                         && _nodeRects.TryGetValue(e.ToNpcId, out var to))
+                    {
                         DrawEdge(from.anchoredPosition, to.anchoredPosition);
+                        drawn++;
+                    }
+            RenderedEdgeCount = drawn;
 
-            RenderedEdgeCount = edges?.Count ?? 0;
+            TrimCustomPositions(nodes);
+        }
 
-            // popup เปิดค้างไว้: node หายไปจากกราฟใหม่ → ปิดเอง; ยังอยู่ → re-apply highlight
-            // (node เก่าถูก destroy ตอน ClearAll — ตัวใหม่เพิ่ง spawn ต้อง highlight ใหม่)
-            if (_detailNodeId != null && !_nodeRects.ContainsKey(_detailNodeId))
-                HideNodeDetail();
-            else if (_detailNodeId != null && _nodeImages.TryGetValue(_detailNodeId, out var selImg) && selImg != null)
-            {
-                if (_selectedImage != null) _selectedImage.color = _selectedOriginalColor;
-                _selectedImage = selImg;
-                selImg.color = _selectedNodeColor;
-            }
+        /// <summary>ตำแหน่ง default ของ clue node: เรียงแถวโค้งเบา ๆ กลางกราฟ (ก่อนผู้เล่นจัดเอง)</summary>
+        private static Vector2 DefaultCluePosition(int index, int total)
+        {
+            if (total == 1) return Vector2.zero;
+            var t = total == 2 ? -0.5f + index : (float)index / (total - 1) - 0.5f; // -0.5..0.5
+            return new Vector2(t * 2f * DefaultSpreadX,
+                Mathf.Cos(t * Mathf.PI) * -DefaultSpreadY * 0.4f);
+        }
+
+        /// <summary>ลบ custom position ของ node ที่ไม่อยู่ในกราฟแล้ว (กัน dict โตค้าง)</summary>
+        private void TrimCustomPositions(List<ClueGraphNodeData> nodes)
+        {
+            var live = new HashSet<string>();
+            foreach (var n in nodes) if (n != null) live.Add(n.Id);
+            var dead = new List<string>();
+            foreach (var k in _customPositions.Keys) if (!live.Contains(k)) dead.Add(k);
+            foreach (var k in dead) _customPositions.Remove(k);
         }
 
         /// <summary>
-        /// ทำลาย child objects เก่าทั้งหมด — detach ออกจาก container ทันที
-        /// (Destroy เป็น deferred ถึงจบเฟรม — ถ้า re-render 2 ครั้งในเฟรมเดียว เช่น
-        /// message-triggered render ชนกับ explicit render, เด็กเก่าต้องหายจาก
-        /// container ก่อน ไม่งั้นนับซ้ำ/ซ้อนทับ) แล้วค่อย Destroy ท้ายเฟรมตามปกติ
+        /// ทำลาย node/edge เก่าทั้งหมด — SetActive(false) ก่อน Destroy (OnDisable ของ
+        /// Graphic/TMP unregister ออกจาก canvas batch ทันที — กัน MissingReferenceException
+        /// ที่เคยพา test run ลง) + detach ออกจาก container ทันที (Destroy เป็น deferred)
         /// </summary>
         public void ClearAll()
         {
             foreach (var go in _spawned)
                 if (go != null)
                 {
-                    // SetActive(false) ก่อน destroy — OnDisable ของ Graphic/TMP ทำงานทันที
-                    // (unregister ออกจาก canvas batch) ไม่งั้นถ้า object ถูก destroy ในสถานะ
-                    // ที่ OnDisable ไม่รัน กราฟฟิกที่ถูกลบไปแล้วจะยังติดค้างใน batch และ
-                    // โยน MissingReferenceException ทุกเฟรม (พาทั้ง test run ลง)
                     go.SetActive(false);
                     go.transform.SetParent(null);
                     Destroy(go);
                 }
             _spawned.Clear();
             _nodeRects.Clear();
-            _nodeImages.Clear();
             _edgeGlowImages.Clear();
             RenderedEdgeCount = 0;
         }
@@ -293,15 +270,23 @@ namespace Marooned.UI.Views
             var img = go.GetComponent<Image>();
             img.sprite = GetNodeSprite();
             img.color = color;
-            // ทุก node รับคลิกได้ (CardSlotUI pattern — IPointerClickHandler บน view component
-            // ส่งต่อ id ผ่าน event, Presenter เป็นคนตัดสินใจ): clue → รายละเอียดเบาะแส,
-            // npc → โซน/อาลิไบ — ไม่มี node แบบ display-only แล้ว
-            img.raycastTarget = true;
-            var proxy = go.AddComponent<GraphNodeClickProxy>();
-            proxy.NodeId = node.Id;
-            proxy.Clicked += id => NodeClicked?.Invoke(id);
+            img.raycastTarget = true; // รับ drag + hover
 
-            // Label บน node (TMP เหมือน UI อื่น — THSarabunPSK SDF)
+            // ---- drag proxy (เดิม GraphNodeClickProxy — click ถูกลบทิ้ง, decision 3) ----
+            var proxy = go.AddComponent<GraphNodeDragProxy>();
+            proxy.NodeKey = node.Id;
+            proxy.Init(_dropZoneRect); // ✏️ v4: ต้อง Init ทุก spawn — ห้าม rect null
+            proxy.Dragged += OnNodeDragged;
+            proxy.DraggedOutOfGraph += key => GraphNodeUnpinRequested?.Invoke(key);
+
+            // ---- hover tooltip (รายละเอียด — decision 3) ----
+            var hover = go.AddComponent<HoverTooltip>();
+            hover.NodeKey = node.Id;
+            hover.TooltipKind = node.Type;
+            hover.HoverEnter += (key, kind) => NodeHoverEnter?.Invoke(key, kind);
+            hover.HoverExit += (key, kind) => NodeHoverExit?.Invoke(key, kind);
+
+            // ---- Label ----
             var textGo = new GameObject("Label", typeof(RectTransform));
             textGo.transform.SetParent(go.transform, false);
             var textRt = textGo.GetComponent<RectTransform>();
@@ -322,14 +307,60 @@ namespace Marooned.UI.Views
             label.raycastTarget = false;
 
             _nodeRects[node.Id] = rt;
-            _nodeImages[node.Id] = img;
             _spawned.Add(go);
         }
 
+        /// <summary>node ถูกลาก: เก็บตำแหน่ง (คงอยู่ข้าม re-render) + วาดเส้นใหม่ตามปลายใหม่</summary>
+        private void OnNodeDragged(string key, Vector2 pos)
+        {
+            _customPositions[key] = pos;
+            RedrawEdgesOnly();
+        }
+
+        /// <summary>วาดเส้นใหม่จากตำแหน่ง node ปัจจุบัน (เรียกระหว่างลาก — node ไม่ rebuild)</summary>
+        public void RedrawEdgesOnly()
+        {
+            // (view เก็บ edges ล่าสุดไว้ให้วาดซ้ำ)
+            RenderEdgesFromCache();
+        }
+
+        private readonly List<ClueGraphEdgeData> _lastEdges = new();
+        /// <summary>Presenter เรียกหลัง RenderGraph เพื่อให้ RedrawEdgesOnly มีข้อมูลล่าสุด</summary>
+        public void SetEdgeCache(List<ClueGraphEdgeData> edges)
+        {
+            _lastEdges.Clear();
+            if (edges != null) _lastEdges.AddRange(edges);
+        }
+
+        private void RenderEdgesFromCache()
+        {
+            // ลบเส้นเก่า (ชื่อ ClueEdge) แล้ววาดใหม่จาก cache
+            for (var i = _spawned.Count - 1; i >= 0; i--)
+            {
+                var go = _spawned[i];
+                if (go != null && go.name == "ClueEdge")
+                {
+                    _spawned.RemoveAt(i);
+                    go.SetActive(false);
+                    go.transform.SetParent(null);
+                    Destroy(go);
+                }
+            }
+            _edgeGlowImages.Clear();
+            var drawn = 0;
+            foreach (var e in _lastEdges)
+                if (e != null
+                    && _nodeRects.TryGetValue(e.FromClueKey, out var from)
+                    && _nodeRects.TryGetValue(e.ToNpcId, out var to))
+                {
+                    DrawEdge(from.anchoredPosition, to.anchoredPosition);
+                    drawn++;
+                }
+            RenderedEdgeCount = drawn;
+        }
+
         /// <summary>
-        /// เส้นเชื่อม witnessed แบบ 2 ชั้นจาก clue → npc: glow ทองนุ่ม (radial-gradient
-        /// sprite ยืดเป็น beam — เต้นช้า ๆ ใน Update) ครอบ core เส้นสว่างหัวท้ายมน
-        /// (root 1 อันต่อ 1 edge — Glow/Core เป็นแค่ layer ลูก ทำให้นับ edge ง่ายเหมือนเดิม)
+        /// เส้นเชื่อม witnessed แบบ 2 ชั้น: glow ทองนุ่ม (pulse ใน Update) ครอบ core เส้นสว่าง
         /// </summary>
         private void DrawEdge(Vector2 from, Vector2 to)
         {
@@ -347,7 +378,6 @@ namespace Marooned.UI.Views
                 Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg - 90f);
             rt.localScale = Vector3.one;
 
-            // glow layer — sprite ไล่ alpha เชิงรัศมี ยืดเกินขอบ core ทุกด้าน = beam นุ่ม
             var glowRt = CreateLayerRect("Glow", rt, EdgeGlowSpread);
             var glowImg = glowRt.gameObject.AddComponent<Image>();
             glowImg.sprite = GetEdgeGlowSprite();
@@ -355,7 +385,6 @@ namespace Marooned.UI.Views
             glowImg.raycastTarget = false;
             _edgeGlowImages.Add(glowImg);
 
-            // core — เส้นสว่างบาง (circle sprite ยืด → หัวท้ายมน)
             var coreRt = CreateLayerRect("Core", rt, 0f);
             var coreImg = coreRt.gameObject.AddComponent<Image>();
             coreImg.sprite = GetNodeSprite();
@@ -365,7 +394,6 @@ namespace Marooned.UI.Views
             _spawned.Add(go);
         }
 
-        /// <summary>child rect ยืดเต็ม parent + ขยายเกินขอบทุกด้านตาม spread (px)</summary>
         private static RectTransform CreateLayerRect(string name, RectTransform parent, float spread)
         {
             var go = new GameObject(name, typeof(RectTransform));
@@ -373,13 +401,13 @@ namespace Marooned.UI.Views
             var rt = go.GetComponent<RectTransform>();
             rt.anchorMin = Vector2.zero;
             rt.anchorMax = Vector2.one;
-            rt.offsetMin = new Vector2(-spread, -spread); // ขยายเกินขอบซ้าย-ล่าง
-            rt.offsetMax = new Vector2(spread, spread);   // ขยายเกินขอบขวา-บน
+            rt.offsetMin = new Vector2(-spread, -spread);
+            rt.offsetMax = new Vector2(spread, spread);
             rt.localScale = Vector3.one;
             return rt;
         }
 
-        /// <summary>จังหวะเต้นของ edge glow (cosmetic — เบา ไม่แตะ logic; ไม่รันตอน panel ซ่อน)</summary>
+        /// <summary>จังหวะเต้นของ edge glow (cosmetic — ไม่รันตอน panel ซ่อน)</summary>
         private void Update()
         {
             if (_edgeGlowImages.Count == 0) return;
@@ -390,11 +418,310 @@ namespace Marooned.UI.Views
                 if (img != null) img.color = pulse;
         }
 
+        // ---- โครงพื้นที่: GraphArea (บน, มี GraphDropZone) + แถวคลัง 2 แถว (ล่าง) ----
+
+        /// <summary>GraphArea ครึ่งบนของ panel — dropzone ของการ์ดจากคลัง (idempotent)</summary>
+        private void EnsureGraphArea()
+        {
+            if (_container != null && _dropZoneRect != null) return;
+
+            if (clueBoardContainer != null && _dropZoneRect != null)
+            {
+                _container = clueBoardContainer;
+                return;
+            }
+
+            // พื้นที่กราฟ: กึ่งกลางแนวนอน, ย่นล่างไว้ให้แถวคลัง 2 แถว
+            if (_container == null)
+            {
+                Transform host;
+                if (clueBoardContainer != null)
+                {
+                    host = clueBoardContainer;
+                }
+                else
+                {
+                    var go = new GameObject("ClueBoardGraphRoot", typeof(RectTransform));
+                    go.transform.SetParent(transform, false);
+                    host = go.transform;
+                }
+                var rt = (RectTransform)host;
+                rt.anchorMin = new Vector2(0.5f, 0.5f);
+                rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.anchoredPosition = new Vector2(0f, 40f);
+                _container = host;
+            }
+
+            // dropzone = กรอบจริงของพื้นที่กราฟ (ขยายเกิน container เล็กน้อย — ขอบหลวม ๆ)
+            if (_dropZoneRect == null)
+            {
+                var dzGo = new GameObject("GraphArea", typeof(RectTransform), typeof(Image));
+                dzGo.transform.SetParent(transform, false);
+                dzGo.transform.SetAsFirstSibling(); // อยู่หลังสุด (ไม่บัง event ของ node/แถวคลัง)
+                _dropZoneRect = (RectTransform)dzGo.transform;
+                _dropZoneRect.anchorMin = new Vector2(0.5f, 0.5f);
+                _dropZoneRect.anchorMax = new Vector2(0.5f, 0.5f);
+                _dropZoneRect.pivot = new Vector2(0.5f, 0.5f);
+                _dropZoneRect.anchoredPosition = new Vector2(0f, 40f);
+                _dropZoneRect.sizeDelta = new Vector2(1560f, 640f);
+                var dzImg = dzGo.GetComponent<Image>();
+                dzImg.sprite = null;
+                dzImg.color = new Color(0f, 0f, 0f, 0f); // โปร่งใส — แค่ raycast พื้นที่
+                dzImg.raycastTarget = true;              // ⚠️ ต้อง true — DraggableCardHandler หา drop
+                                                         // ด้วย EventSystem.RaycastAll (โปร่งใสแต่ยังต้อง
+                                                         // เป็น raycast target ถึงจะโดน); ตั้ง first sibling
+                                                         // จึงไม่บัง node/card ที่อยู่หน้ามัน
+                _dropZone = dzGo.AddComponent<GraphDropZone>();
+                _dropZone.NodesDropped += ids => LibraryCardDropped?.Invoke(ids);
+                _dropZone.NodeDraggedOut += key => GraphNodeUnpinRequested?.Invoke(key);
+            }
+        }
+
+        /// <summary>แถวคลัง 2 แถวล่าง (idempotent): ScrollRect แนวนอน + Viewport + Content + layout</summary>
+        private void EnsureLibraryRows()
+        {
+            if (_libraryReady) return;
+            _libraryReady = true;
+
+            _clueRowLabel = CreateBoardText("ClueLibraryLabel", "คลังเบาะแส", 24,
+                TextAlignmentOptions.Left, new Color(0.85f, 0.82f, 0.75f, 0.9f));
+            var clRt = _clueRowLabel.rectTransform;
+            clRt.anchorMin = new Vector2(0f, 0f); clRt.anchorMax = new Vector2(0f, 0f);
+            clRt.pivot = new Vector2(0f, 0f);
+            clRt.anchoredPosition = new Vector2(24f, LibraryBottomOffset + 2 * LibraryRowHeight + 6f);
+            clRt.sizeDelta = new Vector2(300f, 28f);
+
+            _clueScrollContent = CreateScrollRow("ClueLibraryRow",
+                LibraryBottomOffset + LibraryRowHeight + 14f);
+            _npcScrollContent = CreateScrollRow("NpcLibraryRow", LibraryBottomOffset - 10f);
+        }
+
+        private TMP_Text _clueRowLabel;
+
+        /// <summary>สร้างแถว ScrollRect แนวนอน 1 แถว — คืน Content rect</summary>
+        private RectTransform CreateScrollRow(string name, float bottomY)
+        {
+            var rowGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(ScrollRect), typeof(RectTransform));
+            rowGo.transform.SetParent(transform, false);
+            var rowRt = (RectTransform)rowGo.transform;
+            rowRt.anchorMin = new Vector2(0f, 0f);
+            rowRt.anchorMax = new Vector2(1f, 0f);
+            rowRt.pivot = new Vector2(0.5f, 0f);
+            rowRt.anchoredPosition = new Vector2(0f, bottomY);
+            rowRt.sizeDelta = new Vector2(0f, LibraryRowHeight);
+            var rowBg = rowGo.GetComponent<Image>();
+            rowBg.sprite = null;
+            rowBg.color = LibraryBgColor;
+            rowBg.raycastTarget = true; // ScrollRect ต้องรับ drag เพื่อเลื่อน
+
+            var scroll = rowGo.GetComponent<ScrollRect>();
+            scroll.horizontal = true;
+            scroll.vertical = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 0f;
+
+            // Viewport (Mask)
+            var vpGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            vpGo.transform.SetParent(rowRt, false);
+            var vpRt = (RectTransform)vpGo.transform;
+            vpRt.anchorMin = Vector2.zero; vpRt.anchorMax = Vector2.one;
+            vpRt.offsetMin = Vector2.zero; vpRt.offsetMax = Vector2.zero;
+            var vpImg = vpGo.GetComponent<Image>();
+            vpImg.sprite = null;
+            vpImg.color = Color.white;
+            vpImg.raycastTarget = false;
+            vpGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            // Content (HorizontalLayoutGroup + ContentSizeFitter)
+            var contentGo = new GameObject("Content", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
+            contentGo.transform.SetParent(vpRt, false);
+            var contentRt = (RectTransform)contentGo.transform;
+            contentRt.anchorMin = new Vector2(0f, 0f);
+            contentRt.anchorMax = new Vector2(0f, 0.5f); // ซ้าย-กลางแนวตั้ง — โตทางขวา
+            contentRt.pivot = new Vector2(0f, 0.5f);
+            var hlg = contentGo.GetComponent<HorizontalLayoutGroup>();
+            hlg.childAlignment = TextAnchor.MiddleLeft;
+            hlg.spacing = 14f;
+            hlg.padding = new RectOffset(12, 12, 8, 8);
+            hlg.childForceExpandWidth = false;
+            hlg.childForceExpandHeight = true;
+            hlg.childControlWidth = false;
+            hlg.childControlHeight = false;
+            var fitter = contentGo.GetComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
+
+            scroll.viewport = vpRt;
+            scroll.content = contentRt;
+
+            return contentRt;
+        }
+
         /// <summary>
-        /// พื้นกระดาน detective board (สร้างครั้งเดียว — idempotent): backdrop เข้มโปร่ง
-        /// บนตัว panel + หัวเรื่อง + hint ปุ่ม Tab + legend 3 แถว ทั้งหมด raycastTarget=false
-        /// (กระดาน display-only — ไม่บังคลิกการ์ด/โลก) ฟอนต์ THSarabunPSK เหมือน UI อื่น
+        /// Render คลังการ์ดเบาะแส (group ตาม DefId แล้ว — "×N" รวมใน Subtitle)
+        /// — การ์ดเดียวแทนกลุ่ม, GroupNodeIds = instance ทั้งกลุ่ม (ลากวาง = pin หมด)
         /// </summary>
+        public void RenderClueLibrary(List<ClueLibraryCardData> cards)
+        {
+            EnsureBackground();
+            EnsureLibraryRows();
+            ClearRow(_clueLibraryCards, _clueScrollContent);
+            if (cards == null) return;
+
+            foreach (var c in cards)
+            {
+                if (c == null || string.IsNullOrEmpty(c.Key)) continue;
+                var go = CreateLibraryCard(c, _clueScrollContent, ClueNodeColor);
+                _clueLibraryCards.Add(go);
+            }
+        }
+
+        /// <summary>Render คลัง NPC (portrait + ชื่อ — ไม่เทา, Locked decision 6)</summary>
+        public void RenderNpcLibrary(List<ClueLibraryCardData> cards)
+        {
+            EnsureBackground();
+            EnsureLibraryRows();
+            ClearRow(_npcLibraryCards, _npcScrollContent);
+            if (cards == null) return;
+
+            foreach (var c in cards)
+            {
+                if (c == null || string.IsNullOrEmpty(c.Key)) continue;
+                var go = CreateLibraryCard(c, _npcScrollContent, NpcNodeColor,
+                    isNpcCard: true, npcId: c.Key);
+                _npcLibraryCards.Add(go);
+            }
+        }
+
+        private void ClearRow(List<GameObject> cards, RectTransform content)
+        {
+            foreach (var go in cards)
+                if (go != null)
+                {
+                    go.SetActive(false);
+                    Destroy(go);
+                }
+            cards.Clear();
+            // Content ที่ผ่าน HorizontalLayoutGroup — layout rebuild เองเมื่อ child เปลี่ยน
+            if (content != null) LayoutRebuilder.ForceRebuildLayoutImmediate(content);
+        }
+
+        /// <summary>การ์ดคลัง 1 ใบ: พื้น + ชื่อ + subtitle + DraggableCardHandler + HoverTooltip</summary>
+        private GameObject CreateLibraryCard(ClueLibraryCardData c, RectTransform content,
+            Color accent, bool isNpcCard = false, string npcId = null)
+        {
+            var go = new GameObject($"LibCard_{c.Key}", typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(content, false);
+            var rt = (RectTransform)go.transform;
+            rt.sizeDelta = new Vector2(190f, LibraryRowHeight - 24f);
+            rt.localScale = Vector3.one;
+
+            var bg = go.GetComponent<Image>();
+            bg.sprite = null;
+            bg.color = CardBgColor;
+            bg.raycastTarget = true;
+
+            // แถบสี accent ซ้าย (clue=แดง, npc=น้ำเงิน — แยกแถวให้เห็นชัด)
+            var stripeGo = new GameObject("Stripe", typeof(RectTransform), typeof(Image));
+            stripeGo.transform.SetParent(go.transform, false);
+            var sRt = (RectTransform)stripeGo.transform;
+            sRt.anchorMin = Vector2.zero; sRt.anchorMax = Vector2.zero;
+            sRt.pivot = new Vector2(0f, 0.5f);
+            sRt.anchoredPosition = new Vector2(0f, rt.sizeDelta.y / 2f);
+            sRt.sizeDelta = new Vector2(8f, rt.sizeDelta.y);
+            var sImg = stripeGo.GetComponent<Image>();
+            sImg.sprite = GetNodeSprite();
+            sImg.color = accent;
+            sImg.raycastTarget = false;
+
+            if (isNpcCard)
+            {
+                // ---- portrait (ครึ่งซ้าย) ----
+                var portraitGo = new GameObject("Portrait", typeof(RectTransform), typeof(Image));
+                portraitGo.transform.SetParent(go.transform, false);
+                var pRt = (RectTransform)portraitGo.transform;
+                pRt.anchorMin = new Vector2(0f, 0.5f); pRt.anchorMax = new Vector2(0f, 0.5f);
+                pRt.pivot = new Vector2(0f, 0.5f);
+                pRt.anchoredPosition = new Vector2(20f, 0f);
+                pRt.sizeDelta = new Vector2(78f, 78f);
+                var pImg = portraitGo.GetComponent<Image>();
+                // NpcPortraitResolver: Resources/Portraits/{npcId} → fallback สี hash (ไม่เทา)
+                var portrait = NpcPortraitResolver.LoadPortrait(npcId);
+                if (portrait != null)
+                {
+                    pImg.sprite = portrait;
+                    pImg.color = Color.white;
+                    pImg.preserveAspect = true;
+                }
+                else
+                {
+                    pImg.sprite = GetNodeSprite();
+                    pImg.color = NpcPortraitResolver.FallbackColor(npcId);
+                }
+                pImg.raycastTarget = false;
+            }
+
+            // ---- ชื่อ + subtitle (ครึ่งขวา) ----
+            var nameX = isNpcCard ? 110f : 22f;
+            var name = CreateBoardText("Name", c.DisplayName, 24, TextAlignmentOptions.Left,
+                TitleColor, go.transform);
+            var nRt = name.rectTransform;
+            nRt.anchorMin = new Vector2(0f, 1f); nRt.anchorMax = new Vector2(1f, 1f);
+            nRt.pivot = new Vector2(0f, 1f);
+            nRt.anchoredPosition = new Vector2(nameX, -10f);
+            nRt.sizeDelta = new Vector2(-(nameX + 10f), 40f);
+            name.enableAutoSizing = true;
+            name.fontSizeMin = 16; name.fontSizeMax = 24;
+
+            var sub = CreateBoardText("Sub", c.Subtitle ?? "", 20, TextAlignmentOptions.Left,
+                new Color(0.85f, 0.82f, 0.75f, 0.85f), go.transform);
+            var subRt = sub.rectTransform;
+            subRt.anchorMin = new Vector2(0f, 0f); subRt.anchorMax = new Vector2(1f, 0f);
+            subRt.pivot = new Vector2(0f, 0f);
+            subRt.anchoredPosition = new Vector2(nameX, 10f);
+            subRt.sizeDelta = new Vector2(-(nameX + 10f), 30f);
+
+            // ---- drag + hover ----
+            var drag = go.AddComponent<DraggableCardHandler>();
+            drag.CardKey = c.Key;
+            drag.GroupNodeIds = c.GroupNodeIds ?? new List<string>();
+            drag.TooltipView = EnsureTooltipView();
+            drag.DroppedOnGraph += ids =>
+            {
+                // ปล่อยในกราฟ = pin ทุก instance ในกลุ่ม (decision 1)
+                _dropZone.HandleDrop(ids);
+            };
+
+            var hover = go.AddComponent<HoverTooltip>();
+            hover.NodeKey = c.Key;
+            hover.TooltipKind = isNpcCard ? "npc" : "clue_library"; // การ์ดคลัง ≠ graph node (M(G))
+            hover.HoverEnter += (key, kind) => NodeHoverEnter?.Invoke(key, kind);
+            hover.HoverExit += (key, kind) => NodeHoverExit?.Invoke(key, kind);
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(content);
+            return go;
+        }
+
+        /// <summary>tooltip กลางตัวเดียว (สร้างครั้งเดียว — ใช้ร่วมทุกการ์ด/node; Presenter เรียกผ่าน view)</summary>
+        public HoverTooltipView EnsureTooltipView()
+        {
+            if (_tooltip != null) return _tooltip;
+            EnsureBackground();
+            _tooltip = gameObject.AddComponent<HoverTooltipView>();
+            // เก็บ ref ของ text ไว้ assert ใน test (ผ่าน reflection-free getter ด้านล่าง)
+            _tooltipText = (TMP_Text)_tooltip.GetType()
+                .GetField("_text", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                ?.GetValue(_tooltip);
+            _tooltipReady = true;
+            return _tooltip;
+        }
+
+        /// <summary>ซ่อน tooltip กลาง (เรียกจาก Presenter ตอน drag เริ่ม/panel ปิด)</summary>
+        public void HideTooltip() => _tooltip?.Hide();
+
+        // ---- chrome: พื้น/หัวเรื่อง/hint/legend (เดิม — hint ปรับให้ตรง drag/hover) ----
+
         private void EnsureBackground()
         {
             if (_backgroundReady) return;
@@ -402,11 +729,10 @@ namespace Marooned.UI.Views
 
             var bg = GetComponent<Image>();
             if (bg == null) bg = gameObject.AddComponent<Image>();
-            bg.sprite = null;          // solid color — เรียบ ไม่แย่ง attention
+            bg.sprite = null;
             bg.color = BoardColor;
             bg.raycastTarget = false;
 
-            // ---- หัวเรื่อง (บนกลาง) ----
             var title = CreateBoardText("ClueBoardTitle", "ผังเบาะแส — Clue Board", 40,
                 TextAlignmentOptions.Center, TitleColor);
             var titleRt = title.rectTransform;
@@ -416,17 +742,17 @@ namespace Marooned.UI.Views
             titleRt.anchoredPosition = new Vector2(0f, -18f);
             titleRt.sizeDelta = new Vector2(600f, 60f);
 
-            // ---- hint ปุ่ม toggle (ล่างขวา) ----
-            var hint = CreateBoardText("ClueBoardHint", "[Tab] เปิด/ปิดกระดาน • คลิกเบาะแส/พยาน = รายละเอียด", 26,
-                TextAlignmentOptions.Right, new Color(0.85f, 0.82f, 0.75f, 0.75f));
+            // ✅ hint ปรับให้สะท้อน drag/hover (ศัพท์เดิม: "กระดาน", "เบาะแส", "พยาน")
+            var hint = CreateBoardText("ClueBoardHint",
+                "[Tab] เปิด/ปิดกระดาน • ลากการ์ดจากคลังขึ้นกราฟ = ปักหมุด • ลากออกนอกกรอบ = ถอน • ชี้การ์ด = รายละเอียด",
+                22, TextAlignmentOptions.Right, new Color(0.85f, 0.82f, 0.75f, 0.75f));
             var hintRt = hint.rectTransform;
             hintRt.anchorMin = new Vector2(1f, 0f);
             hintRt.anchorMax = new Vector2(1f, 0f);
             hintRt.pivot = new Vector2(1f, 0f);
             hintRt.anchoredPosition = new Vector2(-20f, 14f);
-            hintRt.sizeDelta = new Vector2(620f, 36f);
+            hintRt.sizeDelta = new Vector2(980f, 32f);
 
-            // ---- legend (ล่างซ้าย) ----
             CreateLegendItem("LegendClue", ClueNodeColor, "เบาะแส (clue)", 0);
             CreateLegendItem("LegendNpc", NpcNodeColor, "พยาน (witness)", 1);
             CreateLegendItem("LegendEdge", new Color(1f, 0.82f, 0.35f), "เส้นเชื่อม witnessed", 2);
@@ -475,9 +801,8 @@ namespace Marooned.UI.Views
         }
 
         /// <summary>
-        /// ปุ่ม HUD มุมซ้ายบน (alternative ของ Tab สำหรับผู้เล่นเมาส์) — สร้างบนตัว Canvas
-        /// (พ่อของ panel) ไม่ใช่บน panel เพราะตอน board ซ่อน ปุ่มต้องยังอยู่ให้กดเปิดกลับ
-        /// เรียกจาก Presenter.Initialize ได้แม้ panel inactive (แค่สร้าง hierarchy)
+        /// ปุ่ม HUD มุมซ้ายบน (alternative ของ Tab) — บน Canvas พ่อของ panel
+        /// (board ซ่อน ปุ่มต้องยังอยู่)
         /// </summary>
         public void EnsureToggleButton()
         {
@@ -496,7 +821,7 @@ namespace Marooned.UI.Views
             rt.localScale = Vector3.one;
 
             var img = go.GetComponent<Image>();
-            img.sprite = null; // solid — เรียบเหมือน chrome ของ board
+            img.sprite = null;
             img.color = new Color(0.16f, 0.14f, 0.12f, 0.9f);
 
             var btn = go.GetComponent<Button>();
@@ -510,293 +835,10 @@ namespace Marooned.UI.Views
             lRt.anchorMax = Vector2.one;
             lRt.offsetMin = Vector2.zero;
             lRt.offsetMax = Vector2.zero;
-            label.raycastTarget = false; // ให้คลิกทะลุ label ลงปุ่ม
+            label.raycastTarget = false;
         }
 
-        // ---- Detail popup (คลิก node) — clue: ข้อมูล map จาก ClueBoardEntry, npc: โซน+เบาะแสที่เป็นพยาน
-        //      (ทั้งหมดผ่าน filter เดียวกับ get_clue_board — Presenter reuse handler เดิม) ----
-
-        // formatter ร่วม popup + การ์ดปักหมุด (format ที่เดียว — Presenter เรียกใช้ตอนเรียง pin)
-
-        /// <summary>หัวข้อ popup/การ์ดของ clue</summary>
-        public static string FormatClueTitle(ClueNodeDetail d) => d.Label;
-
-        /// <summary>เนื้อหา popup/การ์ดของ clue (reliability/location/witnesses)</summary>
-        public static string FormatClueBody(ClueNodeDetail d)
-        {
-            var witnessText = d.Witnesses != null && d.Witnesses.Count > 0
-                ? string.Join(", ", d.Witnesses)
-                : "ไม่มีผู้เห็น";
-            return $"ความน่าเชื่อถือ: {d.Reliability}\nพบที่: {d.LocationId}\nพยาน: {witnessText}";
-        }
-
-        /// <summary>หัวข้อ popup/การ์ดของ npc witness</summary>
-        public static string FormatNpcTitle(NpcNodeDetail d) => d.NpcId;
-
-        /// <summary>เนื้อหา popup/การ์ดของ npc witness (โซน + อาลิไบคร่าว ๆ —
-        /// เบาะแสซ้ำรวมเป็น "×N" ผ่าน ClueGraphTextFormat.DedupeCounted — display-only)</summary>
-        public static string FormatNpcBody(NpcNodeDetail d)
-        {
-            var status = d.IsAlive ? "มีชีวิต" : "ตายแล้ว";
-            var clueText = d.WitnessedClues != null && d.WitnessedClues.Count > 0
-                ? "\n- " + string.Join("\n- ", ClueGraphTextFormat.DedupeCounted(d.WitnessedClues))
-                : " ไม่พบ (จากเบาะแสที่เก็บได้)";
-            return $"โซน: {d.Zone} • {status}\nพยานให้เบาะแสที่เก็บได้:{clueText}";
-        }
-
-        /// <summary>เปิด/อัปเดต popup รายละเอียดของ clue + highlight node ที่เลือก</summary>
-        public void ShowClueDetail(ClueNodeDetail detail)
-        {
-            if (detail == null) { HideNodeDetail(); return; }
-            ShowDetail(detail.InstanceId, FormatClueTitle(detail), FormatClueBody(detail),
-                ClueNodeSelectedColor);
-        }
-
-        /// <summary>
-        /// เปิด/อัปเดต popup รายละเอียดของ npc witness: โซนปัจจุบัน + อาลิไบคร่าว ๆ
-        /// (เบาะแสที่คนนี้เป็นพยาน — คือ "ยอมรับว่าอยู่แถวนั้นตอนนั้น" โดยปริยาย)
-        /// </summary>
-        public void ShowNpcDetail(NpcNodeDetail detail)
-        {
-            if (detail == null) { HideNodeDetail(); return; }
-            ShowDetail(detail.NpcId, FormatNpcTitle(detail), FormatNpcBody(detail),
-                NpcNodeSelectedColor);
-        }
-
-        /// <summary>แกนกลาง popup: เขียนข้อความ + highlight node (restore สีเดิมของตัวก่อนเสมอ)</summary>
-        private void ShowDetail(string nodeId, string title, string body, Color selectedColor)
-        {
-            EnsureDetailPopup();
-            _detailNodeId = nodeId;
-            _detailTitle.text = title;
-            _detailBody.text = body;
-            _detailRoot.gameObject.SetActive(true);
-
-            if (_selectedImage != null) _selectedImage.color = _selectedOriginalColor;
-            _selectedOriginalColor = _nodeImages.TryGetValue(nodeId, out var img) && img != null
-                ? img.color
-                : ClueNodeColor;
-            _selectedNodeColor = selectedColor;
-            _selectedImage = _nodeImages.TryGetValue(nodeId, out var sel) ? sel : null;
-            if (_selectedImage != null) _selectedImage.color = selectedColor;
-        }
-
-        /// <summary>ปิด popup + คืนสีเดิมของ node (เรียกได้ปลอดภัยแม้ยังไม่เคยเปิด)</summary>
-        public void HideNodeDetail()
-        {
-            _detailNodeId = null;
-            if (_detailRoot != null) _detailRoot.gameObject.SetActive(false);
-            if (_selectedImage != null) _selectedImage.color = _selectedOriginalColor;
-            _selectedImage = null;
-        }
-
-        /// <summary>การ์ดรายละเอียด — สร้าง lazy ครั้งแรก (sibling ท้ายสุดจึงวาดทับ node ทุกตัว)</summary>
-        private void EnsureDetailPopup()
-        {
-            if (_detailRoot != null) return;
-
-            var go = new GameObject("ClueDetailPopup", typeof(RectTransform), typeof(Image));
-            go.transform.SetParent(transform, false);
-            _detailRoot = (RectTransform)go.transform;
-            _detailRoot.anchorMin = new Vector2(0.5f, 0.5f);
-            _detailRoot.anchorMax = new Vector2(0.5f, 0.5f);
-            _detailRoot.pivot = new Vector2(0.5f, 0.5f);
-            _detailRoot.anchoredPosition = new Vector2(0f, -40f);
-            _detailRoot.sizeDelta = new Vector2(620f, 280f);
-            _detailRoot.localScale = Vector3.one;
-
-            var card = go.GetComponent<Image>();
-            card.sprite = null;         // solid dark card — เรียบ เน้นตัวหนังสือ
-            card.color = new Color(0.09f, 0.08f, 0.07f, 0.97f);
-            card.raycastTarget = true;  // บังคลิกทะลุ — กันคลิกโดน node ใต้การ์ด
-
-            _detailTitle = CreateBoardText("DetailTitle", string.Empty, 34,
-                TextAlignmentOptions.Center, TitleColor, _detailRoot);
-            var tRt = _detailTitle.rectTransform;
-            tRt.anchorMin = new Vector2(0f, 1f);
-            tRt.anchorMax = new Vector2(1f, 1f);
-            tRt.pivot = new Vector2(0.5f, 1f);
-            tRt.anchoredPosition = new Vector2(0f, -12f);
-            tRt.sizeDelta = new Vector2(-32f, 44f); // stretch-x, ขอบซ้ายขวา 16
-
-            _detailBody = CreateBoardText("DetailBody", string.Empty, 27,
-                TextAlignmentOptions.Left, new Color(0.95f, 0.93f, 0.88f), _detailRoot);
-            var bRt = _detailBody.rectTransform;
-            bRt.anchorMin = Vector2.zero;
-            bRt.anchorMax = Vector2.one;
-            bRt.offsetMin = new Vector2(24f, 40f);
-            bRt.offsetMax = new Vector2(-24f, -60f);
-
-            var hint = CreateBoardText("DetailHint", "[คลิก node เดิมอีกครั้งเพื่อปิด]", 20,
-                TextAlignmentOptions.Center, new Color(0.85f, 0.82f, 0.75f, 0.7f), _detailRoot);
-            var hRt = hint.rectTransform;
-            hRt.anchorMin = new Vector2(0.5f, 0f);
-            hRt.anchorMax = new Vector2(0.5f, 0f);
-            hRt.pivot = new Vector2(0.5f, 0f);
-            hRt.anchoredPosition = new Vector2(70f, 8f);
-            hRt.sizeDelta = new Vector2(330f, 28f);
-
-            // ---- ปุ่มปักหมุด (ล่างซ้ายของ popup) — ยิง PinRequested(nodeId ที่ popup เปิดอยู่)
-            //      Presenter เป็นคน toggle รายการ pin (View passive ส่งแค่ id) ----
-            var pinGo = new GameObject("PinButton", typeof(RectTransform), typeof(Image), typeof(Button));
-            pinGo.transform.SetParent(_detailRoot, false);
-            var pinRt = (RectTransform)pinGo.transform;
-            pinRt.anchorMin = new Vector2(0f, 0f);
-            pinRt.anchorMax = new Vector2(0f, 0f);
-            pinRt.pivot = new Vector2(0f, 0f);
-            pinRt.anchoredPosition = new Vector2(12f, 6f);
-            pinRt.sizeDelta = new Vector2(150f, 34f);
-            pinRt.localScale = Vector3.one;
-            var pinImg = pinGo.GetComponent<Image>();
-            pinImg.sprite = null;
-            pinImg.color = new Color(0.24f, 0.20f, 0.14f, 0.95f);
-            _pinButton = pinGo.GetComponent<Button>();
-            _pinButton.targetGraphic = pinImg;
-            _pinButton.onClick.AddListener(() =>
-            {
-                if (_detailNodeId != null) PinRequested?.Invoke(_detailNodeId);
-            });
-            var pinLabel = CreateBoardText("PinLabel", "[ปักหมุด]", 22,
-                TextAlignmentOptions.Center, new Color(1f, 0.82f, 0.35f), pinGo.transform);
-            var pRt = pinLabel.rectTransform;
-            pRt.anchorMin = Vector2.zero;
-            pRt.anchorMax = Vector2.one;
-            pRt.offsetMin = Vector2.zero;
-            pRt.offsetMax = Vector2.zero;
-            pinLabel.raycastTarget = false;
-
-            go.SetActive(false);
-        }
-
-        // ---- Pin workspace (ปักหมุดหลาย node เทียบกัน) — Presenter เรียงรายการแล้วส่ง
-        //      PinnedCardData (format ผ่าน formatter ด้านบน) — view วาดแถวล่างกลาง + badge ทองบน node
-
-        /// <summary>
-        /// วาดแถวการ์ดปักหมุดใหม่ทั้งหมด (idempotent — ลบของเก่าแล้วสร้างตามลิสต์)
-        /// เรียงซ้าย→ขวาตามลำดับ pin; node ที่ถูก pin มีจุดทองมุมขวาบนเป็นสัญลักษณ์
-        /// </summary>
-        public void RenderPinned(List<PinnedCardData> cards)
-        {
-            EnsurePinRow();
-
-            // เคลียร์การ์ด + badge เก่า (badge ผูกกับ node ที่ re-render อาจถูก destroy ไปแล้ว)
-            // — เหมือน ClearAll: SetActive(false) ก่อน Destroy เพื่อให้ Graphic/TMP unregister ทันที
-            foreach (var card in _pinCards.Values)
-                if (card != null)
-                {
-                    card.SetActive(false);
-                    Destroy(card);
-                }
-            _pinCards.Clear();
-            foreach (var badge in _pinBadges.Values)
-                if (badge != null)
-                {
-                    badge.gameObject.SetActive(false);
-                    Destroy(badge.gameObject);
-                }
-            _pinBadges.Clear();
-
-            if (cards == null || cards.Count == 0) return;
-
-            const float cardW = 380f, cardH = 220f, gap = 20f;
-            var rowW = cards.Count * cardW + (cards.Count - 1) * gap;
-            _pinRow.sizeDelta = new Vector2(rowW, cardH);
-
-            for (var i = 0; i < cards.Count; i++)
-            {
-                var c = cards[i];
-                if (c == null || string.IsNullOrEmpty(c.NodeId)) continue;
-
-                var go = new GameObject($"PinCard_{c.NodeId}", typeof(RectTransform), typeof(Image));
-                go.transform.SetParent(_pinRow, false);
-                var rt = (RectTransform)go.transform;
-                rt.anchoredPosition = new Vector2(i * (cardW + gap) + cardW / 2f - rowW / 2f, 0f);
-                rt.sizeDelta = new Vector2(cardW, cardH);
-                rt.localScale = Vector3.one;
-                var bg = go.GetComponent<Image>();
-                bg.sprite = null;
-                bg.color = new Color(0.10f, 0.09f, 0.08f, 0.95f);
-                bg.raycastTarget = true; // บังคลิกทะลุ — กันคลิกโดน node ใต้การ์ด
-
-                var title = CreateBoardText("Title", c.Title, 26,
-                    TextAlignmentOptions.Center, TitleColor, go.transform);
-                var tRt = title.rectTransform;
-                tRt.anchorMin = new Vector2(0f, 1f);
-                tRt.anchorMax = new Vector2(1f, 1f);
-                tRt.pivot = new Vector2(0.5f, 1f);
-                tRt.anchoredPosition = new Vector2(0f, -8f);
-                tRt.sizeDelta = new Vector2(-70f, 36f); // เว้นขวาไว้ให้ปุ่ม ×
-
-                var body = CreateBoardText("Body", c.Body, 21,
-                    TextAlignmentOptions.Left, new Color(0.95f, 0.93f, 0.88f), go.transform);
-                var bRt = body.rectTransform;
-                bRt.anchorMin = Vector2.zero;
-                bRt.anchorMax = Vector2.one;
-                bRt.offsetMin = new Vector2(16f, 8f);
-                bRt.offsetMax = new Vector2(-16f, -48f);
-
-                // ปุ่ม × ถอนหมุด — ยิง PinRequested เดียวกับปุ่มใน popup (toggle ฝั่ง presenter)
-                var closeGo = new GameObject("CloseBtn", typeof(RectTransform), typeof(Image), typeof(Button));
-                closeGo.transform.SetParent(go.transform, false);
-                var cRt = (RectTransform)closeGo.transform;
-                cRt.anchorMin = new Vector2(1f, 1f);
-                cRt.anchorMax = new Vector2(1f, 1f);
-                cRt.pivot = new Vector2(1f, 1f);
-                cRt.anchoredPosition = new Vector2(-8f, -8f);
-                cRt.sizeDelta = new Vector2(30f, 30f);
-                cRt.localScale = Vector3.one;
-                var cImg = closeGo.GetComponent<Image>();
-                cImg.sprite = GetNodeSprite();
-                cImg.color = new Color(0.55f, 0.28f, 0.24f);
-                var closeBtn = closeGo.GetComponent<Button>();
-                closeBtn.targetGraphic = cImg;
-                var nodeId = c.NodeId;
-                closeBtn.onClick.AddListener(() => PinRequested?.Invoke(nodeId));
-                var closeLabel = CreateBoardText("X", "×", 24,
-                    TextAlignmentOptions.Center, Color.white, closeGo.transform);
-                var xRt = closeLabel.rectTransform;
-                xRt.anchorMin = Vector2.zero;
-                xRt.anchorMax = Vector2.one;
-                xRt.offsetMin = Vector2.zero;
-                xRt.offsetMax = Vector2.zero;
-                closeLabel.raycastTarget = false;
-
-                _pinCards[c.NodeId] = go;
-
-                // badge จุดทองบน node ที่ถูก pin (node หายไประหว่าง render → ข้าม)
-                if (_nodeImages.TryGetValue(c.NodeId, out var nodeImg) && nodeImg != null)
-                {
-                    var badgeGo = new GameObject("PinBadge", typeof(RectTransform), typeof(Image));
-                    badgeGo.transform.SetParent(nodeImg.transform, false);
-                    var bRt2 = (RectTransform)badgeGo.transform;
-                    bRt2.anchorMin = new Vector2(1f, 1f);
-                    bRt2.anchorMax = new Vector2(1f, 1f);
-                    bRt2.pivot = new Vector2(1f, 1f);
-                    bRt2.anchoredPosition = new Vector2(-4f, -4f);
-                    bRt2.sizeDelta = new Vector2(26f, 26f);
-                    bRt2.localScale = Vector3.one;
-                    var badgeImg = badgeGo.GetComponent<Image>();
-                    badgeImg.sprite = GetNodeSprite();
-                    badgeImg.color = new Color(1f, 0.82f, 0.35f);
-                    badgeImg.raycastTarget = false; // คลิกทะลุลง node ตัวหลัก
-                    _pinBadges[c.NodeId] = badgeImg;
-                }
-            }
-        }
-
-        /// <summary>แถว pin ล่างกลาง panel (สร้างครั้งแรก — sibling ใต้ popup)</summary>
-        private void EnsurePinRow()
-        {
-            if (_pinRow != null) return;
-            var go = new GameObject("CluePinRow", typeof(RectTransform));
-            go.transform.SetParent(transform, false);
-            _pinRow = (RectTransform)go.transform;
-            _pinRow.anchorMin = new Vector2(0.5f, 0f);
-            _pinRow.anchorMax = new Vector2(0.5f, 0f);
-            _pinRow.pivot = new Vector2(0.5f, 0f);
-            _pinRow.anchoredPosition = new Vector2(0f, 56f);
-            _pinRow.localScale = Vector3.one;
-        }
+        // ---- sprite helpers (เดิม) ----
 
         private Sprite GetEdgeGlowSprite()
         {
@@ -804,7 +846,6 @@ namespace Marooned.UI.Views
             return _edgeGlowSprite;
         }
 
-        /// <summary>radial alpha gradient (quadratic falloff) — ยืดเป็น beam แล้วดูนุ่มเป็น glow</summary>
         private static Sprite CreateEdgeGlowSprite()
         {
             const int size = 64;
@@ -821,31 +862,6 @@ namespace Marooned.UI.Views
             return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 64f);
         }
 
-        private void EnsureContainer()
-        {
-            if (_container != null) return;
-            if (clueBoardContainer != null)
-            {
-                _container = clueBoardContainer;
-                return;
-            }
-
-            // Auto-create ใต้ตัว panel เอง (transform ของ view) — ไม่ใช่ Canvas ตรง ๆ
-            // เพราะ ClueBoardPresenter.TogglePanel ทำ SetActive ที่ panel ที่เดียว
-            // (panel inactive → ทั้งกราฟถูกซ่อนตาม) panel เป็น full-stretch ใต้ Canvas
-            // จึงมีพิกัดตรงกับ Canvas space — child กึ่งกลาง = กึ่งกลางจอเท่าเดิม
-            // (ถ้าผูก clueBoardContainer เองใน Inspector ต้องวางใต้ panel ด้วย
-            // ไม่งั้น toggle จะไม่ซ่อน container นั้น)
-            var go = new GameObject("ClueBoardGraphRoot", typeof(RectTransform));
-            go.transform.SetParent(transform, false);
-            var rt = go.GetComponent<RectTransform>();
-            rt.anchorMin = new Vector2(0.5f, 0.5f);
-            rt.anchorMax = new Vector2(0.5f, 0.5f);
-            rt.pivot = new Vector2(0.5f, 0.5f);
-            rt.anchoredPosition = Vector2.zero; // กึ่งกลาง panel (= กึ่งกลางจอ)
-            _container = go.transform;
-        }
-
         private Sprite GetNodeSprite()
         {
             if (_nodeSprite == null) _nodeSprite = CreateCircleSprite();
@@ -858,10 +874,10 @@ namespace Marooned.UI.Views
             return _labelFont;
         }
 
-        /// <summary>
-        /// วงกลม placeholder สร้างจาก Texture2D ใน code (copy logic จาก
-        /// WorldItemSystem.CreateCircleSprite ที่เป็น private — ตาม spec Step 4)
-        /// </summary>
+        /// <summary>font ร่วม (HoverTooltipView ใช้ — WorldItemSystem.LoadLabelFont เป็น internal)</summary>
+        public TMP_FontAsset GetLabelFontPublic() => GetLabelFont();
+
+        /// <summary>วงกลม placeholder สร้างจาก Texture2D ใน code (copy จาก WorldItemSystem)</summary>
         private static Sprite CreateCircleSprite()
         {
             const int size = 64;
@@ -875,24 +891,6 @@ namespace Marooned.UI.Views
                 }
             tex.Apply();
             return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 64f);
-        }
-    }
-
-    /// <summary>
-    /// ติดบน node root (clue + npc — Image raycastTarget=true) — IPointerClickHandler คลิกซ้าย
-    /// → ยิง Clicked(NodeId) ให้ ClueBoardView ส่งต่อ Presenter (pattern เดียวกับ
-    /// CardSlotUI — View passive ส่งแค่ id, Presenter ตัดสินใจว่าจะโชว์อะไร)
-    /// </summary>
-    public class GraphNodeClickProxy : MonoBehaviour, IPointerClickHandler
-    {
-        public string NodeId { get; set; }
-        public event Action<string> Clicked;
-
-        public void OnPointerClick(PointerEventData eventData)
-        {
-            if (eventData.button != PointerEventData.InputButton.Left) return;
-            if (string.IsNullOrEmpty(NodeId)) return;
-            Clicked?.Invoke(NodeId);
         }
     }
 }

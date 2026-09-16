@@ -1,0 +1,4 @@
+=== Clue System v2 (f) Test E — 16:07:10 ===
+[E] nodes = 3, edges = 2 (pin NPC เดียว → กราฟดึงทุกกลุ่มที่คนนี้เป็นพยาน — intended behavior)
+RESULT: PASS
+

@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-09-16 — Clue System v2 (f): Drag-Drop Workspace + Libraries + Dedupe + AI Pin Tool
+
+### Added
+- **Drag-drop workspace redesign**: Graph area at top (pinned nodes only, custom-positioned via drag), two-row library below (clue groups ×N + NPC portraits). Drag card from library → graph = pin all instances in group; drag node out of graph bounds = unpin. No click behavior remains — details via hover tooltips only.
+- **Drag/Scroll arbitration**: `DraggableCardHandler` resolves Pending → Dragging | Scrolling on first significant movement (>10px). Vertical = card pickup (ghost), horizontal = ScrollRect forward. State decided once, never re-evaluated.
+- **Hover tooltips**: `HoverTooltip` (per-card enter/exit handler) + `HoverTooltipView` (singleton under root canvas). Clue graph nodes show reliability + locations + witnesses (from M(G) only). NPC graph nodes + library cards show witnessed clue list. Both use `ClueGraphTextFormat.DedupeCounted` for display-only ×N deduplication.
+- **ClueGroupUtil**: Groups clue instances by DefId (proxy = DisplayName). Produces `ClueGroup{DefId, DisplayName, Reliability, Instances}` for library rendering.
+- **NpcPortraitResolver**: Loads `Resources/Portraits/{npcId}` sprite, falls back to deterministic colored circle from hash.
+- **M(G) graph semantics**: Display group G when M(G) = {instances in G that are pinned} ∪ {instances in G witnessed by pinned NPCs} is non-empty. Label shows "×k" when k > 1. NPC N shown when N is pinned or N witnesses a pinned instance. Edge (G,N) shown when a witnessed instance links them and either the instance or NPC is pinned.
+- **GraphNodeDragProxy** (replaces `GraphNodeClickProxy`): `IBeginDragHandler`/`IDragHandler`/`IEndDragHandler` only — no click. `Init(RectTransform dropZoneRect)` required at spawn time. Hides tooltip on drag start.
+- **GraphDropZone**: `INodeDropHandler` for raycast-based drop detection + `IDropHandler` fallback.
+- **CluePinState batch API**: `PinMany(List<string>)` / `UnpinMany(List<string>)` fire single `Changed` event. MaxPinned ceiling + eviction removed.
+- **`set_pinned_clue` MCP tool**: Explicit `pinned: true/false` semantics (idempotent, retry-safe). Validates against live `get_clue_graph` node universe before mutation. Main-thread dispatch via `McpMainThreadDispatcher`. Presenter subscribes to `CluePinState.Changed` — one refresh path for player clicks, AI tools, and prunes.
+- **`get_pinned_clues` MCP tool**: Returns current pin list with resolved data (clue facts / NPC zone+witnessed). Human-readable via `ClueGraphTextFormat.RenderPinned`. Empty state returns hint line.
+- **DedupeCounted**: `ClueGraphTextFormat.DedupeCounted(list)` collapses repeated alibi entries into `<label> @ <location> ×N`. Used by both MCP `RenderPinned` and `ClueBoardView.FormatNpcBody` for parity.
+- **Stale pin pruning**: `CluePinState.PruneDead(predicate)` called at start of every `RenderAsync`. Injects a fake id → next render sweeps it.
+
+### Changed
+- **MCP bridge descriptions updated**: `SetPinnedClue` and `GetPinnedClue` `[Description]` attributes no longer mention max pins or eviction language.
+- **All tests converted to `InjectClueInstance`** (deterministic) instead of `SeedAndCollect` (TryGenerate snapshots witnesses at creation time, subject to ambient tick races producing empty `WitnessNpcIds`).
+- **Test A–K rewrite**: All click/popup/pin-row tests deleted. New tests cover drag-drop, scroll arbitration, unpin-outside, M(G) NPC pin expansion, hover tooltips, MCP set_pinned_clue reactivity, node position persistence, regression, description audit, and stale pin pruning.
+
+### Removed
+- `GraphNodeClickProxy` (replaced by `GraphNodeDragProxy`)
+- All `IPointerClickHandler` / `Clicked` event / `_wasDragged` from view
+- Detail popup (popup GameObject, `EnsureDetailPopup`, pin-row/pin-cards/badges)
+- `NodeClicked` event from `ClueBoardView`
+- `MaxPinned` constant and oldest-first eviction loop from `CluePinState`
+- `ClueNodeDetail` / `NpcNodeDetail` view-data classes from presenter
+- Static formatters: `FormatClueTitle`, `FormatClueBody`, `FormatNpcTitle`, `FormatNpcBody` from view (replaced by `ClueGraphTextFormat.DedupeCounted`)
+
+### Evidence
+- 11/11 PlayMode tests PASS (A–K, evidence 15:51 in `TestEvidence/clue-system-v2-f/`)
+
+---
+
 ## 2026-09-15 — Clue System v2 (e): Presentation layer (toggle + polish + clickable nodes + NPC alibi)
 
 ### Added
@@ -18,43 +54,3 @@
 ### Changed
 - **`get_clue_graph` MCP tool output is now human-readable** (was debug string `nodes: [...]/edges: [...]`): returns `Clue Graph — N clue(s), M witness link(s):` header + one line per clue with witness labels. No handler/message/shape changes.
 - Test B: `GetComponentInParent<Canvas>()` → `GetComponentInParent<Canvas>(true)` — the panel now starts inactive and Unity's default lookup excludes inactive ancestors.
-- `ClueBoardVisualRunner` activates the panel before rendering (board starts hidden).
-- Fix caught in self-review: `CreateLayerRect` had `offsetMax = (-spread,-spread)` (should be `+spread`) — glow layer would have collapsed to core size instead of spreading.
-- Fix caught by Test G: `TogglePin`'s unpin path returned immediately after `Remove()` without re-rendering — the card stayed on screen until the next unrelated render (Test asserted 2 cards after ×, got 3). Unpin now calls `RefreshPinnedAsync()` before returning.
-- UI hardening found by a `MissingReferenceException` on a destroyed `TextMeshProUGUI` (destroyed graphics still registered in the canvas batch poisoned every subsequent test): `ClearAll`/`RenderPinned` now `SetActive(false)` before deferred `Destroy` so `OnDisable` unregisters immediately.
-
-### Test evidence
-- `TestEvidence/clue-system-v2-e/` — **A/B/C executed 2026-09-15, all PASS** — A (bridge round-trip returns text summary, not JSON/debug; `player_local` witness visible through real filter), B (radial layout radii 150/300 from real RectTransforms, 18/18 edges), C (re-render triggered by `ClueGeneratedMessage`, nodes 9→10). Fix found by Test B: `ClearAll()` now detaches children before deferred `Destroy` (double-count when two renders landed in the same frame).
-- **Re-run 05:35 after toggle+polish: A/B/C 3/3 PASS again** (B: 3 clue @ r≈150, 4 npc @ r≈300, 10/10 edges — Glow/Core children don't affect counting). Visual re-verified at 05:39 (`board-game-view.png`): pixel-scan at CanvasScaler scale 0.426 (match=0.5 → geometric mean of ratios) — clue nodes 41–86px (expected 64±23), npc nodes 111–143px (expected 128±17), gold glow present along edges, backdrop dark 98.2% of frame.
-- **Run 07:01 after NPC witness details: A–F 6/6 PASS** — new evidence: F (`F_NpcNodeClick_ShowsZone_AndWitnessedClues.txt`: npc node click → popup `npc_02 | โซน: beach • มีชีวิต / พยานให้เบาะแสที่เก็บได้: คราบเลือด @ beach …`; ground-truth guard: popup must not contain "killer"); D updated (all nodes including NPC verified clickable).
-- **Run 08:04 after pin workspace: A–G 7/7 PASS** — new evidence: G (`G_PinMultipleNodes_ShowsSideBySideCards_WithCapAndClose.txt`: pin clue + npc_02 → 2 cards side by side; pin a 4th → oldest dropped, cards=3; press × → unpinned, cards=2). First G run failed exactly as the code-review predicted (× left 3 cards) — fix re-verified in the second run.
-- **Run 08:48 after get_pinned_clues + pin persistence: A–H 8/8 PASS** — new evidence: H (`H_PinState_ExposedToMcp_AndSurvivesBoardReopen.txt`): pins made through real popup clicks → in-process handler returns both pins in pin order (clue: DisplayName/Reliability via the board handler; npc: zone=beach, alive, witnessed clues) → **close + reopen board → 2 pin cards redrawn from `CluePinState`** → real stdio bridge round-trip of `get_pinned_clues` returns the identical pinned state (`Pinned Clues — 2 node(s) pinned (oldest first): [clue] … / [npc] npc_04 | zone=beach • alive | witnessed: …`), ground-truth guard (no "killer") passed. `RunBridgeConversation` was parameterized by tool name to reuse the Test A stdio harness.
-- **Run 09:23 after set_pinned_clue + dedupe ×N: A–I 9/9 PASS** — new evidence: I (`I_SetPinnedClue_AiSidePinning_AndDedupedAlibiDisplay.txt`): AI pins clue + npc via the in-process handler (order preserved) → idempotency verified (`already_pinned`/`not_pinned`, state unchanged) → `unknown_node`/`missing_node_id` rejected → **AI-side pin appeared on the in-game UI (2 cards)** via the `Changed` subscription → dedupe verified with the sum invariant (5 raw witnessed entries → 2 displayed lines: `คราบเลือด @ beach ×4; รอยขีดข่วน @ beach`; ×N counts sum to the real instance count) → real stdio bridge round-trip `set_pinned_clue {nodeId, pinned:true}` returned `Pinned <id>. Current pins (oldest first): [<id>]` and the state mutation landed in `CluePinState`.
-- Test assembly note: `Marooned.Tests.Runtime.asmdef` needed a `UnityEngine.UI` reference for `Button`/`ExecuteEvents` in D/E/F.
-- Design note (wiki): a real alibi system doesn't exist yet — the popup derives its "alibi" from already-player-visible data only (zone + witnessed collected clues). If a proper alibi system lands later (GDD line 393), the presenter's NPC branch should switch to it; the view contract `NpcNodeDetail` stays unchanged.
-- Wiki: `deduction.md` gained an **AI Deduction Workflow** section (observe → collect → review → read player pins via `get_pinned_clues` → reason → accuse), documenting pin actions as a player-side signal of what the player is comparing, plus a status refresh (clue collection / `investigate_clue` now exist; AI-side pinning listed as not-yet-available).
-- **New MCP tool `set_pinned_clue`** — the AI VTuber can pin/unpin clue-board nodes itself (explicit `pinned` bool set semantics, not toggle — idempotent and retry-safe; `already_pinned`/`not_pinned` returned as informational reasons with `Success=true`). Validation rejects `missing_node_id` and `unknown_node` (checked against the live `get_clue_graph` node universe — the same filtered set the board renders) **before** any state mutation. Mutation runs on the main thread via `McpMainThreadDispatcher` (pins now drive UI), and the presenter subscribes to `CluePinState.Changed` so every mutation source (player click, AI tool, prune) refreshes the pin row through one path. Every response carries the current pin list so the AI can update its model in one call. `RunBridgeConversation` now accepts tool arguments, and `MiniSerialize` handles bools/int correctly (JSON lowercase).
-- **Dedupe ×N for repeated alibi lines (display-only)**: `ClueGraphTextFormat.DedupeCounted` collapses repeated "<label> @ <location>" entries into `<label> @ <location> ×N` (N = real instance count, first-occurrence order) — used by both `RenderPinned` (MCP) and `ClueBoardView.FormatNpcBody` (popup/pin cards) so the AI and the player see the identical form. Raw `WitnessedClues` data is untouched.
-- Known cosmetic: multiple witnessed instances with the same clue name render duplicate lines — consider "name @ zone ×N" display dedup (display-only, data unchanged).
-
-## 2026-09-14 — Clue System v2 (parts a–d)
-
-### Breaking changes
-- **`get_clue_board` response shape changed** (part d): previously returned a flat list of clue card id strings (`collectedClueCardIds`); now returns `entries: List<ClueBoardEntry>` where each entry carries `instanceId`, `displayName`, `reliability`, `locationId`, and a privacy-filtered `witnessNpcIds` list. AI VTuber clients must adapt.
-- `PlayerSurvivalState.CollectedClueCardIds` renamed to `CollectedClueInstanceIds` (MessagePack Key(8) preserved — wire-compatible).
-
-### Added
-- **(a) Data model + registry**: `ClueInstance` (MessagePack, Keys 0–6) with `ClueTriggerSource` enum (KillSabotage / TaskSabotage / IncidentalAction / Hunting); `ClueDef.ClueCategory` (Luban column + mapper); central registry `GameStateProvider.AllClueInstances`; `ActionClueTriggerDef` table (7 weighted triggers).
-- **(b) Generation pipeline + kill hook**: `ClueGenerationSystem.TryGenerate(...)` — independent per-trigger weighted rolls, witness snapshot excluding the source actor (player is never their own witness), instances stored centrally, `ClueGeneratedMessage` published 1:1. `NpcDirectorSystem.SpawnClues` now routes kills through the pipeline (0/1/2 clues per kill per weights).
-- **(c) Incidental hooks + investigate tool**: `ExplorationSystem` generates IncidentalAction clues (water-related loot or 10% roll); `NodeHarvestSystem` generates Hunting clues (`HarvestableNodeDef.isHuntingTarget`, new `node_deer`); new `investigate_clue` MCP tool — **zero parameters**, server-side player location only (anti cross-zone scouting), main-thread dispatched, `VisibleToBystanders` → instant else 50% roll.
-- **(d) MCP graph response layer**: `get_clue_board` returns filtered `ClueBoardEntry` list (witnesses filtered to alive NPCs + player); new `get_clue_graph` tool (nodes = collected clues + witnesses, edges = `witnessed`).
-
-### Privacy / information hiding
-- `ClueInstance.SourceActorId` and `WitnessNpcIds` never leave the server: `ClueGeneratedMessage` carries only id/def/location; board/graph responses expose only filtered witness ids. Verified by byte-scan of serialized responses (test D, part d).
-- `investigate_clue` accepts no location parameter — the handler forces `player.CurrentLocationId`.
-
-### Test evidence
-- `TestEvidence/clue-system-v2-a/` — A–D (load 7 triggers, ClueCategory, empty registry, board handler).
-- `TestEvidence/clue-system-v2-b/` — A–F (kill hook via real `use_card`, statistical roll distribution 200×, witness exclusion, player-not-own-witness, MCP regression).
-- `TestEvidence/clue-system-v2-c/` — A–F (explore/hunt hooks, investigate round-trip via real McpBridge, no-location-param enforcement, kill-hook regression).
-- `TestEvidence/clue-system-v2-d/` — A–D (board shape + filtered witnesses, dead-witness filter, graph JSON, SourceActorId byte-scan).

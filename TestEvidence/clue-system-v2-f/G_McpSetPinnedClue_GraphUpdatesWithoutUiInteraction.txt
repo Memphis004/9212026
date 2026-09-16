@@ -1,0 +1,5 @@
+=== Clue System v2 (f) Test G — 16:07:10 ===
+[G] nodes before AI pin: 0
+[G] nodes after AI pin: 3 (npc 'npc_01' + groups auto-pulled)
+RESULT: PASS
+

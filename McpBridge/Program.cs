@@ -113,7 +113,7 @@ namespace Marooned.McpBridge
             return ClueGraphTextFormat.Render(res);
         }
 
-        [McpServerTool, Description("Get the clue-board nodes the player has pinned for side-by-side comparison, oldest first. Same filtered data as get_clue_board (perpetrators and dead NPCs never appear). For each pinned clue: name, reliability, location, surviving witnesses; for each pinned NPC witness: current zone, alive status, and the collected clues they witnessed (loose alibi). Empty result means nothing is pinned right now.")]
+        [McpServerTool, Description("Get the clue-board nodes currently pinned on the player's graph workspace (drag-drop board), oldest first. No cap on pin count. Same filtered data as get_clue_board (perpetrators and dead NPCs never appear). For each pinned clue: name, reliability, location, surviving witnesses; for each pinned NPC witness: current zone, alive status, and the collected clues they witnessed (loose alibi). Empty result means nothing is pinned right now.")]
         public async Task<string> GetPinnedClues()
         {
             // Clue System v2 (e) pin workspace: human-readable summary (MCP convention) —
@@ -156,7 +156,7 @@ namespace Marooned.McpBridge
             _setPinnedClue = setPinnedClue;
         }
 
-        [McpServerTool, Description("Pin or unpin a clue-board node (clue instance id or witness NPC id from get_clue_graph) on the player's clue board for side-by-side comparison. Idempotent set semantics -- safe to retry. Response always includes the current pin list (use it to update your model without another call). Pinning a 4th node drops the oldest automatically. Same state the player sees in-game.")]
+        [McpServerTool, Description("Pin or unpin a clue-board node (clue instance id or witness NPC id from get_clue_graph) on the player's clue board. The board is a drag-drop workspace: the player (or you) pins nodes into a graph area and drags them out to unpin. No cap on how many nodes can be pinned. Idempotent set semantics -- safe to retry. Response always includes the current pin list (use it to update your model without another call). Same state the player sees in-game; the graph re-renders immediately on change.")]
         public async Task<string> SetPinnedClue(
             [Description("Node id to pin/unpin (from get_clue_graph: a clue instance id or an NPC witness id)")] string nodeId,
             [Description("true = pin the node, false = unpin it")] bool pinned)

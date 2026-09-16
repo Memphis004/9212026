@@ -82,9 +82,10 @@ tools เท่าที่มี และ **ไม่มี tool ใดคื�
    `set_pinned_clue` (pin/unpin เอง):
    pin เป็น action ร่วมของทั้งสองฝั่งบน state เดียว (CluePinState) — player คลิก node
    บนกระดาน → [ปักหมุด] (× บนการ์ด = ถอน), AI เรียก `set_pinned_clue` พร้อม
-   `nodeId` (จาก `get_clue_graph`) และ `pinned` (true/false); สูงสุด 3, เกินตัดตัวเก่าสุด;
-   idempotent — pin ซ้ำ/unpin ซ้ำ = no change (ปลอดภัยกับ retry); pin รอดจากปิด/เปิด
-   กระดานใน session เดียวกัน — ดู [[clue-system-v2-presentation]]
+   `nodeId` (จาก `get_clue_graph`) และ `pinned` (true/false); ไม่มีเพดาน (workspace
+   semantics — ลากเข้า/ออก = pin/unpin); idempotent — pin ซ้ำ/unpin ซ้ำ = no change
+   (ปลอดภัยกับ retry); pin รอดจากปิด/เปิดกระดานใน session เดียวกัน — ดู
+   [[clue-system-v2-presentation]]
    - **AI pin เพื่อวิเคราะห์**: pin คู่ที่สงสัไว้เทียบกัน (clue + npc witness) แล้วอ่าน
      `get_pinned_clues` เพื่อเห็นข้อมูลสรุป — pin ที่ player ทำไว้ = สัญญาณว่า player
      สงสัยอะไร (AI ควรอ่านก่อนพูด):

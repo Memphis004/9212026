@@ -1,0 +1,6 @@
+=== Clue System v2 (f) Test H — 16:07:10 ===
+[H] pos before drag: (-687.88, -771.14)
+[H] pos after drag: (273.51, 182.34)
+[H] pos after re-render: (273.51, 182.34) ✓ persisted
+RESULT: PASS
+

@@ -22,25 +22,39 @@ using Debug = UnityEngine.Debug;
 namespace Marooned.EditorTools
 {
     /// <summary>
-    /// Clue System v2 — Part (e): Presentation layer (PlayMode evidence)
+    /// Clue System v2 — Part (f): drag-drop workspace redesign (PlayMode evidence)
+    /// ตาม Locked decisions: ไม่มี click ทั้งหมด (drag + hover เท่านั้น), ลากการ์ดจาก
+    /// คลังขึ้นกราฟ = pin ทั้งกลุ่ม, ลาก node ออกนอกกรอบ = unpin, ปัดแนวนอน = เลื่อนรายการ,
+    /// ไม่มีเพดาน pin, tooltip = M(G) เท่านั้น
     ///
-    /// A: MCP tool get_clue_graph ต้องคืน human-readable text summary (ผ่าน bridge stdio จริง)
-    ///    — ไม่ใช่ JSON/debug string ("nodes: [" / "edges: [" ต้องหายไป)
-    /// B: ClueBoardView radial layout — clue nodes วงใน (r≈150), npc วงนอก (r≈300),
-    ///    เฉพาะ npc ที่มี edge, มีเส้นเชื่อมครบทุก edge, container อยู่ใต้ Canvas
-    /// C: Reactivity — เกิด ClueGeneratedMessage (ผ่าน ClueGenerationSystem.TryGenerate จริง)
-    ///    → presenter re-render ทันที (จำนวน node เพิ่ม)
+    /// A: ลากการ์ดเบาะแสขึ้นกราฟ → node + เส้น; get_pinned_clues ครบทุก instance ของกลุ่ม
+    /// B: ลากกลุ่ม 5 instance → pin ครบ (ไม่มี eviction — ไม่มีเพดาน)
+    /// C: ปัดแนวนอนบนการ์ด → ScrollRect เลื่อน, ไม่มี ghost, ไม่ pin (drag/scroll arbitration)
+    /// D: ลาก group node ออกนอกกรอบ → unpin เฉพาะสมาชิกที่ pinned ใน M(G)
+    /// E: pin NPC เดียวที่เป็นพยานหลายชนิด → groups โผล่ครบตาม M(G) (กราฟบวม = intended)
+    /// F: hover NPC card + graph clue node → tooltip ถูกต้อง + สอดคล้อง ×k (M(G) เท่านั้น)
+    /// G: MCP set_pinned_clue → กราฟอัปเดตเองผ่าน CluePinState.Changed (ไม่แตะ UI)
+    /// H: ลากจัดตำแหน่ง node → ตำแหน่งคงอยู่ข้าม re-render
+    /// I: regression — bridge text เดิม, ไม่มีซาก pin-row/popup/click, การ์ด NPC ไม่เทา
+    /// J: [Description] ของ SetPinnedClue ไม่มีการอ้างเพดาน/oldest-drop เหลืออยู่
+    /// K: stale pin (inject id ปลอมเข้า pin list ตรง ๆ) → RenderAsync รอบถัดไปกวาดทิ้ง
     /// </summary>
     public class ClueBoardUiPlayModeTests
     {
-        public const string EvidenceDir = "TestEvidence/clue-system-v2-e";
+        public const string EvidenceDir = "TestEvidence/clue-system-v2-f";
 
         static readonly string RepoRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
         static readonly string BridgeDll = Path.Combine(RepoRoot, "McpBridge", "bin", "Debug", "net8.0", "McpBridge.dll");
+        static readonly string BridgeSource = Path.Combine(RepoRoot, "McpBridge", "Program.cs");
 
         GameLifetimeScope _scope;
         GameStateProvider _stateProvider;
         ClueBoardView _view;
+        NpcDirectorSystem _director;
+        ClueGenerationSystem _gen;
+        CluePinState _pins;
+        ClueBoardPresenter _presenter;
+        IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse> _investigate;
 
         [UnitySetUp]
         public IEnumerator SetUp() => UniTask.ToCoroutine(async () =>
@@ -64,54 +78,791 @@ namespace Marooned.EditorTools
             }
             Assert.That(_scope != null, "GameLifetimeScope ไม่เจอใน play mode");
             _view = _scope.Container.Resolve<ClueBoardView>();
-            Assert.That(_view != null, "ClueBoardView ต้อง resolve ได้ (RegisterComponentInHierarchy)");
+            _director = _scope.Container.Resolve<NpcDirectorSystem>();
+            _gen = _scope.Container.Resolve<ClueGenerationSystem>();
+            _pins = _scope.Container.Resolve<CluePinState>();
+            _presenter = _scope.Container.Resolve<ClueBoardPresenter>();
+            _investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
+
+            // test isolation: ปักหมุดค้างจาก test ก่อนหน้าต้องไม่ตกค้าง
+            _pins.Clear();
             await UniTask.Yield();
         });
 
-        // ---------- Test A: MCP tool returns human-readable summary ----------
+        // ---------- shared seed helpers ----------
+
+        /// <summary>player + พยานมีชีวิต n ตัว ย้ายไป beach</summary>
+        List<string> SeedPlayerAndWitnesses(int witnessCount)
+        {
+            var player = _stateProvider.GetPlayer();
+            player.CurrentLocationId = "beach";
+            var npcIds = _director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(witnessCount).ToList();
+            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1 (ทำ witness ได้)");
+            foreach (var id in npcIds) _director.MoveNpc(id, "beach");
+            return npcIds;
+        }
+
+        /// <summary>generate (blood 100%) + investigate จนได้ wanted ชิ้น — คืนรายการ id ที่เก็บได้รอบนี้</summary>
+        async UniTask<List<string>> SeedAndCollect(int wanted, string tag)
+        {
+            var got = new List<string>();
+            for (var i = 0; i < wanted + 3 && got.Count < wanted; i++)
+            {
+                _gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", $"npc_test_killer_{tag}{i}");
+                var r = await _investigate.InvokeAsync(new InvestigateClueRequest());
+                if (r.Success) got.Add(r.FoundInstanceId);
+            }
+            Assert.That(got.Count, Is.GreaterThanOrEqualTo(1), "blood (100%) ต้อง generate + เก็บได้");
+            return got;
+        }
+
+        /// <summary>inject instance เข้า registry+inventory ตรง (deterministic — เลี่ยง weighted roll
+        /// ของ TryGenerate; ใช้ DefId จริงจาก ClueDef เพื่อผ่าน DisplayName/Reliability resolve)</summary>
+        string InjectClueInstance(string defId, string locationId, List<string> witnesses, string tag)
+        {
+            var inst = new ClueInstance
+            {
+                InstanceId = $"test_{defId}_{tag}_{Guid.NewGuid():N}".Replace("clue_", ""),
+                DefId = defId,
+                LocationId = locationId,
+                GameTimestamp = Time.time,
+                Source = ClueTriggerSource.KillSabotage,
+                SourceActorId = "npc_test_killer_" + tag,
+                WitnessNpcIds = witnesses,
+            };
+            _stateProvider.AllClueInstances[inst.InstanceId] = inst;
+            _stateProvider.GetPlayer().CollectedClueInstanceIds.Add(inst.InstanceId);
+            return inst.InstanceId;
+        }
+
+        /// <summary>เปิดกระดาน + render ผ่าน presenter (path เดียวกับเกม) — รอ layout/canvas
+        /// พร้อมจริง (panel อาจเพิ่ง active ครั้งแรก — canvas update หลัง yield)</summary>
+        async UniTask OpenBoardAndRender()
+        {
+            _view.gameObject.SetActive(true);
+            await InvokeRenderAsync(_presenter);
+            await UniTask.Yield();                       // layout pass ของ frame แรกหลัง active
+            Canvas.ForceUpdateCanvases();
+            await UniTask.Delay(50);                     // canvas geometry ต้องทันสมัยก่อน simulate drag/hover
+            Canvas.ForceUpdateCanvases();
+        }
+
+        static Vector2 DropZoneCenterScreen()
+        {
+            var rt = _viewStatic.DropZoneRectForTests;
+            return RectTransformUtility.WorldToScreenPoint(null, rt.position);
+        }
+
+        static ClueBoardView _viewStatic; // helper เข้าถึง view ใน static method (ตั้งใน OpenBoardAndRender)
+
+        /// <summary>simulate ลากการ์ดคลังแบบแนวตั้ง (หยิบ) แล้วปล่อยที่จุด screen ที่กำหนด</summary>
+        static void SimulateCardDrag(GameObject card, Vector2 startScreen, Vector2 endScreen, bool verticalPickup)
+        {
+            var ped = new PointerEventData(EventSystem.current)
+            {
+                position = startScreen,
+                delta = Vector2.zero,
+                // pressEventCamera อ่านอย่างเดียว (overlay canvas = null อยู่แล้ว)
+            };
+            ExecuteEvents.Execute(card, ped, ExecuteEvents.beginDragHandler);
+
+            if (verticalPickup)
+            {
+                // แนวตั้งเด่นเกิน slop (10px) → ตัดสินเป็น Dragging (หยิบการ์ด)
+                ped.delta = new Vector2(0f, -30f);
+                ExecuteEvents.Execute(card, ped, ExecuteEvents.dragHandler);
+                ped.position = endScreen;
+                ped.delta = endScreen - startScreen + new Vector2(0f, -30f);
+                ExecuteEvents.Execute(card, ped, ExecuteEvents.dragHandler);
+            }
+            else
+            {
+                // แนวนอนเด่นเกิน slop → Scrolling (ส่งต่อ ScrollRect — ใช้ *ตำแหน่ง* absolute
+                // ไม่ใช่ delta จึงต้องขยับ position ตามแต่ละ step ด้วย)
+                ped.position = startScreen + new Vector2(60f, 0f);
+                ped.delta = new Vector2(60f, 0f);
+                ExecuteEvents.Execute(card, ped, ExecuteEvents.dragHandler);
+                ped.position = endScreen;
+                ped.delta = endScreen - startScreen;
+                ExecuteEvents.Execute(card, ped, ExecuteEvents.dragHandler);
+            }
+
+            ped.position = endScreen;
+            ExecuteEvents.Execute(card, ped, ExecuteEvents.endDragHandler);
+        }
+
+        /// <summary>simulate ลาก node ในกราฟ (จัดตำแหน่ง) — endInside = ปล่อยใน/นอกกรอบ</summary>
+        static void SimulateNodeDrag(GameObject nodeGo, Vector2 endScreen, bool endInside)
+        {
+            var ped = new PointerEventData(EventSystem.current)
+            {
+                position = DropZoneCenterScreen(),
+                delta = Vector2.zero,
+                // pressEventCamera อ่านอย่างเดียว (overlay canvas = null อยู่แล้ว)
+            };
+            ExecuteEvents.Execute(nodeGo, ped, ExecuteEvents.beginDragHandler);
+            ped.position = endScreen;
+            ped.delta = endScreen - DropZoneCenterScreen();
+            ExecuteEvents.Execute(nodeGo, ped, ExecuteEvents.dragHandler);
+            // ปล่อย: ถ้า endInside=false จุดปลายอยู่นอกกรอบอยู่แล้ว (ผู้เรียกส่งจุดนอกมา)
+            ped.position = endInside ? DropZoneCenterScreen() : endScreen;
+            ExecuteEvents.Execute(nodeGo, ped, ExecuteEvents.endDragHandler);
+        }
+
+        // ---------- Test A: drag clue card onto graph → node + edges + get_pinned_clues ----------
+
+        [UnityTest]
+        public IEnumerator A_DragClueCardOntoGraph_PinsWholeGroup_WithEdges() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test A — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            // ใช้ InjectClueInstance (deterministic) แทน SeedAndCollect —
+            // TryGenerate snapshots witnesses ณ เวลาสร้าง instance ซึ่ง ambient tick อาจ
+            // ย้าย NPC ออกจาก location ก่อนสร้าง → rawWitnesses=[] ได้
+            SeedPlayerAndWitnesses(2);
+            var witnessIds = _director.Npcs.Values.Where(n => n.IsAlive)
+                .Select(n => n.Id).Take(2).ToList();
+            var collected = new List<string> { InjectClueInstance("clue_blood_stain", "beach", witnessIds, "a") };
+            await OpenBoardAndRender();
+
+            Assert.That(_view.ClueLibraryCardsForTests.Count, Is.GreaterThanOrEqualTo(1),
+                "คลังเบาะแสต้องมีการ์ด (clue ที่เก็บแล้ว group ตาม DefId)");
+
+            // การ์ดกลุ่มที่มี instance ที่เพิ่งเก็บ (ไม่ใช้ [0] — กัน residue จาก test ก่อนหน้า)
+            var card = _view.ClueLibraryCardsForTests
+                .FirstOrDefault(c => c.GetComponent<DraggableCardHandler>()?.GroupNodeIds.Contains(collected[0]) == true);
+            Assert.That(card, Is.Not.Null, "ต้องมีการ์ดกลุ่มของ clue ที่เพิ่งเก็บ");
+            var handler = card.GetComponent<DraggableCardHandler>();
+            Assert.That(handler, Is.Not.Null, "การ์ดคลังต้องมี DraggableCardHandler");
+            Assert.That(handler.GroupNodeIds.Count, Is.GreaterThanOrEqualTo(1),
+                "การ์ดกลุ่มต้องพก instance ids ทั้งกลุ่ม");
+            log.AppendLine($"[A] card '{card.name}' group instances = {handler.GroupNodeIds.Count}");
+
+            // ลากขึ้นกราฟ (แนวตั้ง = หยิบ) ปล่อยกลาง GraphArea
+            var before = _pins.PinnedNodeIds.Count;
+            SimulateCardDrag(card, DropZoneCenterScreen() + new Vector2(-200f, -420f), DropZoneCenterScreen(), true);
+
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && _pins.PinnedNodeIds.Count == before)
+                await UniTask.Yield();
+
+            // pin ครบทุก instance ในกลุ่ม (decision 1)
+            foreach (var id in handler.GroupNodeIds)
+                Assert.That(_pins.IsPinned(id), Is.True, $"pin ทั้งกลุ่ม: {id} ต้องถูก pin");
+            log.AppendLine($"[A] pinned after drop: [{string.Join(", ", _pins.PinnedNodeIds)}]");
+
+            // render ที่ trigger โดย Changed อาจยัง in-flight — render ซ้ำจนกราฟครบ
+            var graphDl = Time.realtimeSinceStartup + 5f;
+            while (Time.realtimeSinceStartup < graphDl && _view.RenderedNodeCount < 2)
+            {
+                await InvokeRenderAsync(_presenter);
+                await UniTask.Yield();
+            }
+
+            log.AppendLine($"[A] nodes={_view.RenderedNodeCount} edges={_view.RenderedEdgeCount}");
+
+            // กราฟ: group node + npc witness nodes + เส้นเชื่อม
+            Assert.That(_view.RenderedNodeCount, Is.GreaterThanOrEqualTo(2), "ต้องมี group node + npc node");
+            Assert.That(_view.RenderedEdgeCount, Is.GreaterThanOrEqualTo(1), "ต้องมีเส้นเชื่อมอย่างน้อย 1");
+
+            // get_pinned_clues (MCP chain ใน-process) ครบทุก instance
+            var pinnedHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse>>();
+            var pinnedRes = await pinnedHandler.InvokeAsync(new GetPinnedCluesRequest());
+            var pinnedIds = pinnedRes.Pinned.Select(p => p.NodeId).ToHashSet();
+            foreach (var id in handler.GroupNodeIds)
+                Assert.That(pinnedIds, Does.Contain(id), "get_pinned_clues ต้องครบทุก instance ของกลุ่ม");
+            log.AppendLine(ClueGraphTextFormat.RenderPinned(pinnedRes));
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("A_DragClueCardOntoGraph_PinsWholeGroup_WithEdges", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test B: 5-instance group drag → no eviction (no cap) ----------
+
+        [UnityTest]
+        public IEnumerator B_DragFiveInstanceGroup_AllPinned_NoEviction() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test B — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            SeedPlayerAndWitnesses(2);
+            // กลุ่ม 5 instance: blood 2 (generate จริง) + blood 3 (inject — 100% deterministic
+            // แทนการพึ่ง weighted roll ของ TryGenerate ที่ไม่การันตี) — ต้องเป็น DefId เดียวกัน
+            // จึงรวมเป็นกลุ่มเดียว (จับกลุ่มตาม DefId — Locked decision 2)
+            var w = _director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
+            Assert.That(w.Count, Is.GreaterThanOrEqualTo(1), "ต้องมีพยานมีชีวิตสำหรับ inject");
+            // inject ทั้ง 5 instance (deterministic — ไม่พึ่ง TryGenerate)
+            for (var i = 0; i < 5; i++)
+                InjectClueInstance("clue_blood_stain", "beach", w, $"b{i}");
+            log.AppendLine($"[B] collected total = {_stateProvider.GetPlayer().CollectedClueInstanceIds.Count}");
+
+            await OpenBoardAndRender();
+
+            // หาการ์ดกลุ่มที่มี ≥ 5 instance
+            DraggableCardHandler target = null;
+            foreach (var c in _view.ClueLibraryCardsForTests)
+            {
+                var h = c.GetComponent<DraggableCardHandler>();
+                if (h != null && h.GroupNodeIds.Count >= 5) { target = h; break; }
+            }
+            Assert.That(target, Is.Not.Null, "ต้องมีกลุ่ม ≥ 5 instance (seed แล้ว)");
+            var groupCount = target.GroupNodeIds.Count;
+            log.AppendLine($"[B] group '{target.CardKey}' instances = {groupCount}");
+
+            SimulateCardDrag(target.gameObject, DropZoneCenterScreen() + new Vector2(-200f, -420f),
+                DropZoneCenterScreen(), true);
+
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && _pins.PinnedNodeIds.Count < groupCount)
+                await UniTask.Yield();
+
+            // ✅ assert ไม่มี eviction: pin ครบทุกตัว (เดิม cap 3 จะตัดเหลือ 3)
+            Assert.That(_pins.PinnedNodeIds.Count, Is.EqualTo(groupCount),
+                "ไม่มีเพดาน — pin ทั้งกลุ่มครบทุก instance (ไม่มีตัวเก่าสุดหลุด)");
+            foreach (var id in target.GroupNodeIds)
+                Assert.That(_pins.IsPinned(id), Is.True);
+            log.AppendLine($"[B] all {groupCount} instances pinned — no cap eviction ✓");
+
+            // กราฟแสดง group node เดียวของกลุ่ม (×k) — k = |M(G)| = ทั้งกลุ่ม
+            var groupNode = _view.GetNodeProxyForTests(target.CardKey);
+            Assert.That(groupNode, Is.Not.Null, "ต้องมี group node ในกราฟ");
+            log.AppendLine($"[B] group node '{target.CardKey}' rendered");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("B_DragFiveInstanceGroup_AllPinned_NoEviction", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test C: horizontal swipe on card → scroll, no pin, no ghost ----------
+
+        [UnityTest]
+        public IEnumerator C_HorizontalSwipe_ScrollsRow_NoPin_NoGhost() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test C — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var wC = SeedPlayerAndWitnesses(1);
+            InjectClueInstance("clue_blood_stain", "beach", wC, "c");
+            await OpenBoardAndRender();
+
+            // เติมการ์ดสมรบถ้วนให้ content ล้นแนวนอน (12 ใบ × 190px > viewport) —
+            // render ครั้งถัดไปของ presenter จะล้างทิ้งเอง (ClearRow)
+            var synthetic = new List<ClueLibraryCardData>();
+            for (var i = 0; i < 12; i++)
+                synthetic.Add(new ClueLibraryCardData
+                {
+                    Key = $"test_g_{i:D2}",
+                    DisplayName = $"การ์ดทดสอบ {i:D2}",
+                    Subtitle = "Weak",
+                    GroupNodeIds = new List<string> { $"test_inst_{i:D2}" },
+                });
+            _view.RenderClueLibrary(synthetic);
+            Canvas.ForceUpdateCanvases();
+            await UniTask.Yield();
+
+            var content = _view.ClueScrollContentForTests;
+            Assert.That(content, Is.Not.Null, "ต้องมี scroll content ของแถวคลังเบาะแส");
+            var beforeX = content.anchoredPosition.x;
+
+            // ปัดจากขวาไปซ้าย (เนื้อหาโตทางขวา; Clamp เริ่มที่ x=0 — ปัดขวาไม่มีที่ไป)
+            var card = content.GetChild(0).gameObject;
+            var start = DropZoneCenterScreen() + new Vector2(300f, -420f);
+            SimulateCardDrag(card, start, start - new Vector2(400f, 0f), verticalPickup: false);
+            Canvas.ForceUpdateCanvases();
+            await UniTask.Yield();
+
+            var afterX = content.anchoredPosition.x;
+            log.AppendLine($"[C] content.x before={beforeX:F1} after={afterX:F1}");
+            Assert.That(afterX, Is.Not.EqualTo(beforeX).Within(0.5f),
+                "ปัดแนวนอน → ScrollRect ต้องเลื่อน (forward ผ่าน DraggableCardHandler)");
+
+            // ไม่ pin และไม่มี ghost เหลืออยู่
+            Assert.That(_pins.PinnedNodeIds.Count, Is.EqualTo(0),
+                "ปัดแนวนอนต้องไม่ pin (arbitration เลือก Scrolling)");
+            Assert.That(GameObject.Find("DragGhost_test_g_00"), Is.Null,
+                "โหมด Scrolling ต้องไม่สร้าง ghost");
+            log.AppendLine("[C] no pin, no ghost — arbitration ✓");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("C_HorizontalSwipe_ScrollsRow_NoPin_NoGhost", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test D: drag group node out of frame → unpin only pinned M(G) members ----------
+
+        [UnityTest]
+        public IEnumerator D_DragGroupNodeOut_UnpinsOnlyPinnedMembers() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test D — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var wD = SeedPlayerAndWitnesses(2);
+            var collected = new List<string>
+            {
+                InjectClueInstance("clue_blood_stain", "beach", wD, "d0"),
+                InjectClueInstance("clue_blood_stain", "beach", wD, "d1"),
+            };
+            await OpenBoardAndRender();
+
+            // หา group key ของ blood จาก node ที่ render (pin ผ่าน drag การ์ด)
+            var card = _view.ClueLibraryCardsForTests[0];
+            var handler = card.GetComponent<DraggableCardHandler>();
+            var groupKey = handler.CardKey;
+            Assert.That(groupKey, Does.StartWith("group:"), "การ์ดแรกต้องเป็นการ์ดกลุ่ม clue");
+
+            // pin ทั้งกลุ่ม + pin npc 1 ตัว (พยานของกลุ่ม) — เพื่อพิสูจน์ unpin เฉพาะสมาชิกกลุ่ม
+            SimulateCardDrag(card, DropZoneCenterScreen() + new Vector2(-200f, -420f), DropZoneCenterScreen(), true);
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && _pins.PinnedNodeIds.Count < handler.GroupNodeIds.Count)
+                await UniTask.Yield();
+            Assert.That(_pins.PinnedNodeIds.Count, Is.GreaterThanOrEqualTo(handler.GroupNodeIds.Count),
+                "pin ทั้งกลุ่มก่อนทดสอบ");
+
+            var witnessNpc = _director.Npcs.Values.First(n => n.IsAlive).Id;
+            _pins.Pin(witnessNpc);
+            await UniTask.Yield();
+            await UniTask.Delay(100);
+            await InvokeRenderAsync(_presenter);
+
+            var groupNodeGo = _view.GetNodeProxyForTests(groupKey)?.gameObject;
+            Assert.That(groupNodeGo, Is.Not.Null, "group node ต้องอยู่ในกราฟ");
+            var nodeRect = (RectTransform)groupNodeGo.transform;
+            var posBefore = nodeRect.anchoredPosition;
+            log.AppendLine($"[D] before unpin: pinned = {_pins.PinnedNodeIds.Count}, group pos = {posBefore}");
+
+            // ลากออกนอกกรอบ (มุมล่างซ้ายจอ — นอก GraphArea แน่นอน)
+            SimulateNodeDrag(groupNodeGo, new Vector2(5f, 5f), endInside: false);
+
+            dl = Time.realtimeSinceStartup + 10f;
+            dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && _view.HasNode(groupKey))
+                await UniTask.Yield();
+            await UniTask.Delay(200);
+            await InvokeRenderAsync(_presenter);
+
+            // ✅ unpin เฉพาะสมาชิกที่ pinned ของ M(G) — npc ที่ pin ต้องอยู่ครบ
+            foreach (var id in handler.GroupNodeIds)
+                Assert.That(_pins.IsPinned(id), Is.False, $"สมาชิกกลุ่ม {id} ต้องถูกถอน");
+            Assert.That(_pins.IsPinned(witnessNpc), Is.True,
+                "npc ที่ pin เองต้องไม่โดนถอน (unpin เฉพาะสมาชิกของกลุ่ม)");
+
+            // หลัง render: ถ้า npc ที่ pin เป็นพยานของกลุ่ม → M(G) ยังดึงกลุ่มมา (intended)
+            // ถ้าไม่ใช่พยาน → group node หาย 证明 M(G) semantics ถูกต้อง
+            var boardHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse>>();
+            var board = await boardHandler.InvokeAsync(new GetClueBoardRequest());
+            var groupEntries = board.Entries.Where(e => handler.GroupNodeIds.Contains(e.InstanceId)).ToList();
+            var npcWitnessesGroup = groupEntries.Any(e => e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(witnessNpc));
+            if (npcWitnessesGroup)
+            {
+                Assert.That(_view.HasNode(groupKey), Is.True,
+                    "npc ที่ยัง pin เป็นพยานของกลุ่ม → M(G) ดึงกลุ่ม回来 (intended — locked decision)");
+                log.AppendLine("[D] group node present via M(G) from pinned npc (intended)");
+            }
+            else
+            {
+                Assert.That(_view.HasNode(groupKey), Is.False,
+                    "ไม่มีสมาชิก pinned + ไม่มี npc pin เป็นพยาน → group หาย");
+            }
+            log.AppendLine($"[D] after unpin: pinned = [{string.Join(", ", _pins.PinnedNodeIds)}] (npc ค้าง)");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("D_DragGroupNodeOut_UnpinsOnlyPinnedMembers", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test E: pin single NPC witnessing multiple types → groups per M(G) ----------
+
+        [UnityTest]
+        public IEnumerator E_PinSingleNpc_GroupsAppearPerWitnessedTypes() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test E — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var npcIds = SeedPlayerAndWitnesses(1);
+            var witness = npcIds[0];
+
+            // ชนิดที่ 1: blood (inject — deterministic)
+            var collected = new List<string> { InjectClueInstance("clue_blood_stain", "beach", new List<string> { witness }, "e") };
+
+            // ชนิดที่ 2: scratch mark — inject ตรง (TryGenerate เป็น weighted roll — ไม่ deterministic)
+            // (state injection ที่นี่: เพื่อหา clue ชนิดที่สองที่คนเดียวกันเป็นพยานอย่างแน่นอน)
+            var scratch = new ClueInstance
+            {
+                InstanceId = $"test_scratch_{Guid.NewGuid():N}",
+                DefId = "clue_scratch_mark",
+                LocationId = "beach",
+                GameTimestamp = Time.time,
+                Source = ClueTriggerSource.KillSabotage,
+                SourceActorId = "npc_test_killer_e2",
+                WitnessNpcIds = new List<string> { witness },
+            };
+            _stateProvider.AllClueInstances[scratch.InstanceId] = scratch;
+            _stateProvider.GetPlayer().CollectedClueInstanceIds.Add(scratch.InstanceId);
+
+            await OpenBoardAndRender();
+
+            // pin npc ผ่าน drag การ์ดจากคลัง NPC (GroupNodeIds = [npcId])
+            var npcCard = _view.NpcLibraryCardsForTests.FirstOrDefault(c => c.name == $"LibCard_{witness}");
+            Assert.That(npcCard, Is.Not.Null, "คลัง NPC ต้องมีการ์ดของ witness");
+            SimulateCardDrag(npcCard, DropZoneCenterScreen() + new Vector2(300f, -420f), DropZoneCenterScreen(), true);
+
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && !_pins.IsPinned(witness))
+                await UniTask.Yield();
+            await InvokeRenderAsync(_presenter); // ให้กราฟสะท้อน pin ล่าสุดแบบ deterministic
+
+            // ✅ M(G): ทั้งสองกลุ่ม (blood + scratch) โผล่เพราะ npc ที่ pin เป็นพยานของ instance ในกลุ่ม
+            // (กราฟบวมกรณี pin npc เดียวที่เป็นพยานหลายชนิด = intended behavior — บันทึกไว้ตาม spec)
+            Assert.That(_pins.IsPinned(witness), Is.True, "npc ต้องถูก pin");
+            Assert.That(_view.HasNode("group:คราบเลือด"), Is.True, "กลุ่ม blood ต้องโผล่ (M(G) ดึงจากพยาน)");
+            Assert.That(_view.HasNode("group:รอยขีดข่วน"), Is.True, "กลุ่ม scratch ต้องโผล่ (M(G) ดึงจากพยาน)");
+            Assert.That(_view.HasNode(witness), Is.True, "npc node ต้องโผล่");
+            Assert.That(_view.RenderedEdgeCount, Is.GreaterThanOrEqualTo(2),
+                "แต่ละกลุ่มต้องมีเส้นเชื่อมถึง npc");
+            log.AppendLine($"[E] nodes = {_view.RenderedNodeCount}, edges = {_view.RenderedEdgeCount} " +
+                           "(pin NPC เดียว → กราฟดึงทุกกลุ่มที่คนนี้เป็นพยาน — intended behavior)");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("E_PinSingleNpc_GroupsAppearPerWitnessedTypes", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test F: hover tooltips + ×k consistency (M(G)-only) ----------
+
+        [UnityTest]
+        public IEnumerator F_HoverTooltips_CorrectAndConsistentWithNodeLabel() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test F — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var npcIds = SeedPlayerAndWitnesses(1);
+            var witness = npcIds[0];
+
+            // กลุ่ม blood: instance ที่ 1 (beach — จะ pin), instance ที่ 2 (cave — ไม่ pin)
+            // + ทั้งคู่ witness เดียวกัน → npc tooltip ต้อง dedupe เป็น ×2
+            var inst1 = InjectClueInstance("clue_blood_stain", "beach", new List<string> { witness }, "f1");
+            var collected = new List<string> { inst1 };
+            var inst2 = new ClueInstance
+            {
+                InstanceId = $"test_blood2_{Guid.NewGuid():N}",
+                DefId = "clue_blood_stain",
+                LocationId = "cave", // ต่างที่ — พิสูจน์ว่า tooltip ไม่เอา instance ที่ไม่ pin มาโชว์
+                GameTimestamp = Time.time,
+                Source = ClueTriggerSource.KillSabotage,
+                SourceActorId = "npc_test_killer_f2",
+                WitnessNpcIds = new List<string> { witness },
+            };
+            _stateProvider.AllClueInstances[inst2.InstanceId] = inst2;
+            _stateProvider.GetPlayer().CollectedClueInstanceIds.Add(inst2.InstanceId);
+
+            // pin เฉพาะ instance ที่ 1 (pin ระดับ instance — กลุ่มมี 2 instance แต่ M(G) = 1)
+            await OpenBoardAndRender();
+            _pins.Pin(inst1);
+            await UniTask.Delay(100);
+            await InvokeRenderAsync(_presenter);
+
+            // ---- hover graph clue node → tooltip ต้องใช้ M(G) เท่านั้น ----
+            var groupKey = "group:คราบเลือด";
+            Assert.That(_view.HasNode(groupKey), Is.True, "กลุ่ม blood ต้องอยู่ในกราฟ (มี instance pin)");
+            var nodeGo = _view.GetNodeProxyForTests(groupKey).gameObject;
+            var ped = new PointerEventData(EventSystem.current) { position = DropZoneCenterScreen() };
+            ExecuteEvents.Execute(nodeGo, ped, ExecuteEvents.pointerEnterHandler);
+            await UniTask.Yield();
+
+            var clueTip = _view.TooltipTextForTests; // tooltip lazy-build ตอน Show แรก — อ่านหลัง hover
+            Assert.That(clueTip, Is.Not.Null, "hover clue node แล้ว tooltip ต้องแสดง");
+            log.AppendLine($"[F] clue node tooltip:\n{clueTip}");
+            StringAssert.Contains("beach", clueTip, "tooltip ต้องโชว์ location ของ instance ที่ pin");
+            StringAssert.DoesNotContain("cave", clueTip,
+                "✅ M(G)-only: tooltip ห้ามเอา location ของ instance ที่ไม่ได้ pin มาโชว์ (กันตัวเลขเถียงกันเอง)");
+            StringAssert.DoesNotContain("×2", clueTip,
+                "k=1 (M(G) มี 1 instance) — ห้ามโชว์ ×2 จากทั้งกลุ่ม");
+            ExecuteEvents.Execute(nodeGo, ped, ExecuteEvents.pointerExitHandler);
+
+            // ---- hover NPC card ในคลัง → zone + witnessed (dedupe ×N) ----
+            var npcCard = _view.NpcLibraryCardsForTests.FirstOrDefault(c => c.name == $"LibCard_{witness}");
+            Assert.That(npcCard, Is.Not.Null, "คลัง NPC ต้องมีการ์ด witness");
+            ExecuteEvents.Execute(npcCard, ped, ExecuteEvents.pointerEnterHandler);
+            await UniTask.Yield();
+            var npcTip = _view.TooltipTextForTests; // อ่านใหม่หลัง hover (Show แทนที่ข้อความ)
+            log.AppendLine($"[F] npc card tooltip:\n{npcTip}");
+            StringAssert.Contains(witness, npcTip, "tooltip npc ต้องมี id");
+            StringAssert.Contains("beach", npcTip, "tooltip npc ต้องมีโซนปัจจุบัน");
+
+            // ✅ dedupe invariant (computed — ทนต่อ residue): ผลรวม ×N + บรรทัดเดี่ยว
+            // ต้องเท่ากับจำนวน instance จริงที่คนนี้เป็นพยานบน board
+            var fBoardHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse>>();
+            var fBoard = await fBoardHandler.InvokeAsync(new GetClueBoardRequest());
+            var witnessLines = npcTip.Split('\n').ToList();
+            var witnessIdx = witnessLines.FindIndex(l => l.TrimStart().StartsWith("เป็นพยาน"));
+            var witnessedLines = witnessIdx >= 0 ? witnessLines.Skip(witnessIdx + 1).Where(l => !string.IsNullOrWhiteSpace(l)).ToList() : new List<string>();
+            var actualWitnessCount = fBoard.Entries.Count(e => e != null && e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(witness));
+            var totalFromDisplay = 0;
+            foreach (var line in witnessedLines)
+            {
+                var idx = line.LastIndexOf(" ×");
+                totalFromDisplay += idx >= 0 && int.TryParse(line[(idx + 2)..].Trim(), out var n) ? n : 1;
+            }
+            Assert.That(totalFromDisplay, Is.EqualTo(actualWitnessCount),
+                "display-only dedupe: ผลรวม ×N ต้องเท่ากับจำนวนเบาะแสจริงที่เป็นพยาน (ข้อมูลไม่หาย)");
+            Assert.That(witnessedLines.Any(l => l.Contains(" ×")), Is.True,
+                "มี instance ซ้ำชื่อ/ที่เดียวกัน → ต้องแสดงรูป ×N (ไม่ใช่บรรทัดซ้ำ)");
+            log.AppendLine($"[F] npc dedupe: {actualWitnessCount} raw → {witnessedLines.Count} displayed (×N invariant ✓)");
+            StringAssert.DoesNotContain("killer", npcTip, "ห้ามมี ground truth");
+            ExecuteEvents.Execute(npcCard, ped, ExecuteEvents.pointerExitHandler);
+            await UniTask.Yield();
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("F_HoverTooltips_CorrectAndConsistentWithNodeLabel", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test G: MCP set_pinned_clue → graph updates via Changed (no UI touch) ----------
+
+        [UnityTest]
+        public IEnumerator G_McpSetPinnedClue_GraphUpdatesWithoutUiInteraction() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test G — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var wG = SeedPlayerAndWitnesses(2);
+            var collected = new List<string> { InjectClueInstance("clue_blood_stain", "beach", wG, "g") };
+            await OpenBoardAndRender();
+            var nodesBefore = _view.RenderedNodeCount;
+            log.AppendLine($"[G] nodes before AI pin: {nodesBefore}");
+
+            // ใช้ witness จาก inject แทน board query (board อาจ filtered)
+            var witness = wG[0];
+            var setHandler = _scope.Container.Resolve<IAsyncRequestHandler<SetPinnedClueRequest, SetPinnedClueResponse>>();
+            var res = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = witness, Pinned = true });
+            Assert.That(res.Success, Is.True, "AI pin ต้องสำเร็จ: " + res.FailureReason);
+            Assert.That(res.PinnedNodeIds, Does.Contain(witness));
+
+            // ✅ UI ต้องอัปเดตเองผ่าน CluePinState.Changed (ห้ามเรียก render เอง)
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && !_view.HasNode(witness))
+                await UniTask.Yield();
+            Assert.That(_view.HasNode(witness), Is.True, "npc node ต้องโผล่เองในกราฟ (Changed → render)");
+            Assert.That(_view.RenderedNodeCount, Is.GreaterThan(nodesBefore),
+                "M(G) ดึงกลุ่มที่คนนี้เป็นพยานเข้ากราฟเอง");
+            log.AppendLine($"[G] nodes after AI pin: {_view.RenderedNodeCount} (npc '{witness}' + groups auto-pulled)");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("G_McpSetPinnedClue_GraphUpdatesWithoutUiInteraction", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test H: drag node position persists across re-render ----------
+
+        [UnityTest]
+        public IEnumerator H_NodeDragPosition_PersistsAcrossRerender() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test H — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var wH = SeedPlayerAndWitnesses(2);
+            var collected = new List<string> { InjectClueInstance("clue_blood_stain", "beach", wH, "h") };
+            await OpenBoardAndRender();
+
+            var card = _view.ClueLibraryCardsForTests[0];
+            var groupKey = card.GetComponent<DraggableCardHandler>().CardKey;
+            SimulateCardDrag(card, DropZoneCenterScreen() + new Vector2(-200f, -420f), DropZoneCenterScreen(), true);
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && !_view.HasNode(groupKey)) await UniTask.Yield();
+
+            var nodeGo = _view.GetNodeProxyForTests(groupKey).gameObject;
+            var rt = (RectTransform)nodeGo.transform;
+            var posBefore = rt.anchoredPosition;
+            log.AppendLine($"[H] pos before drag: {posBefore}");
+
+            // ลาก node ไปจุดใหม่ (ปล่อย "ใน" กรอบ — ไม่ unpin)
+            var targetScreen = DropZoneCenterScreen() + new Vector2(180f, 120f);
+            SimulateNodeDrag(nodeGo, targetScreen, endInside: true);
+            await UniTask.Yield();
+            var posAfterDrag = rt.anchoredPosition;
+            Assert.That(posAfterDrag, Is.Not.EqualTo(posBefore).Within(1f), "ลากแล้วตำแหน่งต้องเปลี่ยน");
+            log.AppendLine($"[H] pos after drag: {posAfterDrag}");
+
+            // re-render → ตำแหน่งที่ผู้เล่นลากไว้ต้องคงอยู่ (custom position)
+            await InvokeRenderAsync(_presenter);
+            var nodeGo2 = _view.GetNodeProxyForTests(groupKey).gameObject;
+            var posAfterRerender = ((RectTransform)nodeGo2.transform).anchoredPosition;
+            Assert.That(posAfterRerender, Is.EqualTo(posAfterDrag).Within(1f),
+                "re-render แล้วต้อง spawn ที่ตำแหน่งที่ลากไว้ (_customPositions)");
+            log.AppendLine($"[H] pos after re-render: {posAfterRerender} ✓ persisted");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("H_NodeDragPosition_PersistsAcrossRerender", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test I: regression — bridge text, no remnants, npc cards not gray ----------
 
         [UnityTest]
         [Timeout(360000)]
-        public IEnumerator A_Bridge_GetClueGraph_ReturnsHumanReadableSummary() => UniTask.ToCoroutine(async () =>
+        public IEnumerator I_Regression_BridgeTexts_NoRemnants_NpcCardsNotGray() => UniTask.ToCoroutine(async () =>
         {
             var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test A (bridge) — {DateTime.Now:HH:mm:ss} ===");
+            log.AppendLine($"=== Clue System v2 (f) Test I — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
             Assert.That(File.Exists(BridgeDll), "bridge ยังไม่ build: " + BridgeDll);
 
-            // seed อย่างน้อย 1 clue เข้า board ก่อน (blood 100% — เจอทันที)
-            var player = _stateProvider.GetPlayer();
-            player.CurrentLocationId = "beach";
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var seeded = gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer");
-            Assert.That(seeded.Count, Is.GreaterThanOrEqualTo(1), "blood (100%) ต้องเกิด");
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            var inv = await investigate.InvokeAsync(new InvestigateClueRequest());
-            Assert.IsTrue(inv.Success, "seed clue ต้องเก็บได้: " + inv.FailureReason);
-            log.AppendLine($"[seed] investigate @ beach → {inv.FoundInstanceId[..Math.Min(8, inv.FoundInstanceId.Length)]}…");
+            var wI = SeedPlayerAndWitnesses(2);
+            var collected = new List<string> { InjectClueInstance("clue_blood_stain", "beach", wI, "i") };
+            await OpenBoardAndRender();
 
-            string result = null;
+            // ---- bridge round-trips ยังคืน text เดิม ----
+            string graphResult = null, boardResult = null;
             Exception convError = null;
             await UniTask.Run(() =>
             {
-                try { result = RunBridgeConversation(log, "get_clue_graph"); }
+                try
+                {
+                    graphResult = RunBridgeConversation(log, "get_clue_graph");
+                    boardResult = RunBridgeConversation(log, "get_clue_board");
+                }
                 catch (Exception ex) { convError = ex; }
             });
             if (convError != null) throw convError;
 
-            // ⚠️ ต้องเป็น text summary — ไม่ใช่ debug format เดิม
-            Assert.IsFalse(result.Contains("\"isError\":true"), "tools/call ต้องไม่ error: " + result);
-            var text = ExtractToolText(result);
-            log.AppendLine("[A] get_clue_graph output:");
-            log.AppendLine(text);
-            Assert.IsFalse(text.Contains("nodes:"), "ต้องไม่ใช่ debug format เดิม (nodes: [...])");
-            Assert.IsFalse(text.TrimStart().StartsWith("{"), "ต้องไม่ใช่ JSON ดิบ");
-            StringAssert.Contains("seen near:", text, "ต้องมีบรรทัดรูปแบบ '<clue> — seen near: <witnesses>'");
-            StringAssert.Contains("Clue Graph", text, "ต้องมี header 'Clue Graph — N clue(s)'");
+            var graphText = ExtractToolText(graphResult);
+            Assert.IsFalse(graphResult.Contains("\"isError\":true"), "get_clue_graph ต้องไม่ error");
+            StringAssert.Contains("Clue Graph", graphText, "get_clue_graph ต้องคง header เดิม");
+            StringAssert.Contains("seen near:", graphText, "get_clue_graph ต้องคง format เดิม");
+            log.AppendLine("[I] get_clue_graph text (ย่อ):");
+            log.AppendLine(graphText.Split('\n').Take(3).Aggregate((a, b) => a + "\n" + b) + " …");
+
+            var boardText = ExtractToolText(boardResult);
+            Assert.IsFalse(boardResult.Contains("\"isError\":true"), "get_clue_board ต้องไม่ error");
+            Assert.That(boardText.TrimStart().StartsWith("{"), Is.False, "ต้องไม่ใช่ JSON ดิบ");
+            log.AppendLine("[I] get_clue_board text ✓");
+
+            // ---- ไม่มีซาก click/popup/pin-row เหลืออยู่ (reflection บน view type) ----
+            var viewType = typeof(ClueBoardView);
+            Assert.That(viewType.GetEvent("NodeClicked"), Is.Null, "ลบ NodeClicked event แล้ว (decision 3)");
+            Assert.That(viewType.GetProperty("PinnedCardCountForTests"), Is.Null, "ลบ pin-row hooks แล้ว");
+            Assert.That(viewType.GetProperty("IsDetailVisible"), Is.Null, "ลบ popup hooks แล้ว");
+            Assert.That(viewType.GetProperty("DetailNodeIdForTests"), Is.Null, "ลบ popup hooks แล้ว");
+            Assert.That(viewType.GetProperty("PinButtonForTests"), Is.Null, "ลบ popup pin button แล้ว");
+            Assert.That(AppDomain.CurrentDomain.GetAssemblies()
+                .Any(a => a.GetType("Marooned.UI.Views.GraphNodeClickProxy") != null), Is.False,
+                "GraphNodeClickProxy ต้องถูกแทนด้วย GraphNodeDragProxy ทั้งหมด");
+            log.AppendLine("[I] no click/popup/pin-row remnants ✓ (GraphNodeClickProxy → GraphNodeDragProxy)");
+
+            // ---- การ์ด NPC ไม่เทา (fallback color มีพื้นความสว่าง ≥ 0.45 — decision 6) ----
+            Assert.That(_view.NpcLibraryCardsForTests.Count, Is.GreaterThanOrEqualTo(1), "ต้องมีการ์ด NPC");
+            var grayFound = 0;
+            foreach (var npcCard in _view.NpcLibraryCardsForTests)
+            {
+                var portrait = npcCard.transform.Find("Portrait")?.GetComponent<Image>();
+                Assert.That(portrait, Is.Not.Null, "การ์ด NPC ต้องมี Portrait");
+                var c = portrait.color;
+                var npcId = npcCard.name["LibCard_".Length..];
+                var expected = NpcPortraitResolver.FallbackColor(npcId);
+                Assert.That(c, Is.EqualTo(expected),
+                    $"portrait ของ {npcId} ต้องใช้สี fallback เดิม (deterministic ต่อ npc)");
+                if (c.r < 0.45f && c.g < 0.45f && c.b < 0.45f) grayFound++;
+            }
+            Assert.That(grayFound, Is.EqualTo(0), "ห้ามมี portrait เทา (สี fallback ยกพื้น 0.45+)");
+            log.AppendLine("[I] npc portraits not gray ✓");
 
             log.AppendLine("RESULT: PASS");
-            WriteEvidence("A_Bridge_GetClueGraph_ReturnsHumanReadableSummary", log.ToString());
+            WriteEvidence("I_Regression_BridgeTexts_NoRemnants_NpcCardsNotGray", log.ToString());
             await UniTask.Yield();
         });
+
+        // ---------- Test J: SetPinnedClue description has no cap/oldest language ----------
+
+        [UnityTest]
+        public IEnumerator J_SetPinnedClueDescription_NoCapLanguage() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test J — {DateTime.Now:HH:mm:ss} ===");
+            Assert.That(File.Exists(BridgeSource), "หา source ไม่เจอ: " + BridgeSource);
+
+            var src = File.ReadAllText(BridgeSource);
+            var setIdx = src.IndexOf("Pin or unpin a clue-board node", StringComparison.Ordinal);
+            Assert.That(setIdx, Is.GreaterThanOrEqualTo(0), "SetPinnedClue description ต้องมีอยู่");
+            var setDesc = src.Substring(setIdx, src.IndexOf("\")", setIdx, StringComparison.Ordinal) - setIdx);
+            log.AppendLine("[J] SetPinnedClue description:");
+            log.AppendLine(setDesc);
+
+            StringAssert.DoesNotContain("oldest", setDesc, "ห้ามเหลือข้อความ 'Pinning a 4th node drops the oldest'");
+            StringAssert.DoesNotContain("4th", setDesc, "ห้ามอ้างเพดาน 4 ตัว");
+            StringAssert.Contains("No cap", setDesc, "ต้องบอกชัดว่าไม่มีเพดาน");
+            StringAssert.Contains("drag-drop", setDesc, "ต้องสะท้อน workspace semantics");
+
+            var getIdx = src.IndexOf("Get the clue-board nodes currently pinned", StringComparison.Ordinal);
+            Assert.That(getIdx, Is.GreaterThanOrEqualTo(0), "GetPinnedClues description ต้องถูกแก้ด้วย");
+            var getDesc = src.Substring(getIdx, src.IndexOf("\")", getIdx, StringComparison.Ordinal) - getIdx);
+            StringAssert.DoesNotContain("cap of", getDesc, "GetPinnedClues ห้ามอ้างเพดาน");
+            StringAssert.Contains("No cap", getDesc, "GetPinnedClues ต้องบอกว่าไม่มีเพดาน");
+            log.AppendLine("[J] GetPinnedClues description ✓ (workspace semantics, no cap)");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("J_SetPinnedClueDescription_NoCapLanguage", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- Test K: stale pin pruned on next render ----------
+
+        [UnityTest]
+        public IEnumerator K_StalePin_PruneOnNextRender() => UniTask.ToCoroutine(async () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine($"=== Clue System v2 (f) Test K — {DateTime.Now:HH:mm:ss} ===");
+            _viewStatic = _view;
+
+            var wK = SeedPlayerAndWitnesses(1);
+            var collected = new List<string> { InjectClueInstance("clue_blood_stain", "beach", wK, "k") };
+            await OpenBoardAndRender();
+
+            // inject id ปลอมเข้า pin list ตรง ๆ (เลี่ยงทุก path ปกติ — จำลอง state ตกค้าง)
+            var fakeId = "stale_instance_gone_" + Guid.NewGuid().ToString("N")[..8];
+            _pins.Pin(fakeId);
+            await UniTask.Yield();                       // Changed → render → prune กวาด fake ทันที
+            var dl = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < dl && _pins.IsPinned(fakeId)) await UniTask.Yield();
+            Assert.That(_pins.IsPinned(fakeId), Is.False,
+                "prune ต้องกวาด fake pin ใน render แรกหลัง pin (Changed → RenderAsync → PruneDead) — ");
+
+            // เตรียม live pin: seed แล้ว pin ผ่าน path ปกติ (live ต้องรอด prune)
+            var liveId = collected[0];
+            _pins.Pin(liveId);
+            var kGraphDl = Time.realtimeSinceStartup + 5f;
+            while (Time.realtimeSinceStartup < kGraphDl && !_view.HasNode("group:คราบเลือด"))
+            {
+                await InvokeRenderAsync(_presenter);
+                await UniTask.Yield();
+            }
+            Assert.That(_pins.IsPinned(liveId), Is.True, "pin ที่ยังมีจริงต้องไม่โดน prune");
+            Assert.That(_view.HasNode("group:คราบเลือด"), Is.True, "กราฟยังวาดจาก pin ที่ live ✓");
+            log.AppendLine($"[K] after render: pinned = [{string.Join(", ", _pins.PinnedNodeIds)}] — fake swept");
+
+            log.AppendLine("RESULT: PASS");
+            WriteEvidence("K_StalePin_PruneOnNextRender", log.ToString());
+            await UniTask.Yield();
+        });
+
+        // ---------- helpers ----------
+
+        static async UniTask InvokeRenderAsync(ClueBoardPresenter presenter)
+        {
+            var task = (UniTask)typeof(ClueBoardPresenter)
+                .GetMethod("RenderAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                !.Invoke(presenter, null)!;
+            await task;
+        }
 
         /// <summary>บทสนทนา MCP stdio (รันบน threadpool — block ได้) คืน tools/call response ของ tool ที่กำหนด
         /// (arguments = payload ของ tools/call — anonymous object, serialize ด้วย MiniSerialize)</summary>
@@ -159,11 +910,10 @@ namespace Marooned.EditorTools
                     throw new TimeoutException($"{method} ไม่ตอบใน 40 วิ\nstderr: {stderr}");
                 }
 
-                Rpc("initialize", new { protocolVersion = "2024-11-05", capabilities = new { }, clientInfo = new { name = "clue-e-test", version = "0.1" } });
+                Rpc("initialize", new { protocolVersion = "2024-11-05", capabilities = new { }, clientInfo = new { name = "clue-f-test", version = "0.1" } });
                 writer.WriteLine("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
                 writer.Flush();
 
-                // tools/call (arguments ว่างได้ — query tool ไม่มี parameter)
                 return Rpc("tools/call", new { name = toolName, arguments = arguments ?? (object)new { } });
             }
             finally
@@ -175,7 +925,6 @@ namespace Marooned.EditorTools
 
         static string ExtractToolText(string toolsCallResponse)
         {
-            // text content ของ MCP: {"content":[{"type":"text","text":"..."}]}
             var needle = "\"text\":\"";
             var start = toolsCallResponse.IndexOf(needle, StringComparison.Ordinal);
             if (start < 0) return string.Empty;
@@ -190,747 +939,13 @@ namespace Marooned.EditorTools
             return sb.ToString().Replace("\\n", "\n").Replace("\\u002D", "-");
         }
 
-        // ---------- Test B: radial layout ----------
-
-        [UnityTest]
-        public IEnumerator B_View_RadialLayout_InnerClues_OuterNpcs_WithEdges() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test B — {DateTime.Now:HH:mm:ss} ===");
-
-            // seed 2 clue (investigate ทั้งคู่) + witness ในโซน — เลือกเฉพาะ NPC ที่ยังมีชีวิต
-            // (NPC ตายแล้วจาก ambient kill ไม่ผ่าน witness filter → จะไม่มี edge เกิด)
-            var player = _stateProvider.GetPlayer();
-            var director = _scope.Container.Resolve<NpcDirectorSystem>();
-            player.CurrentLocationId = "beach";
-            var npcIds = director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
-            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1 (ทำ witness ได้)");
-            foreach (var id in npcIds) director.MoveNpc(id, "beach");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            var seeded = 0;
-            for (var round = 0; round < 3 && seeded < 2; round++)
-            {
-                gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_" + round); // blood=100%
-                var r = await investigate.InvokeAsync(new InvestigateClueRequest());
-                if (r.Success) seeded++;
-            }
-            Assert.That(seeded, Is.GreaterThanOrEqualTo(1), "ต้อง seed clue เข้า board ได้อย่างน้อย 1");
-            log.AppendLine($"[seed] collected clues: {player.CollectedClueInstanceIds.Count}");
-
-            // render ผ่าน presenter จริง (เรียก handler ที่มีอยู่ — reuse path เดียวกับเกม)
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-            Assert.That(presenter != null, "ClueBoardPresenter ต้อง resolve ได้ (RegisterEntryPoint)");
-            var renderTask = (UniTask)typeof(ClueBoardPresenter)
-                .GetMethod("RenderAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .Invoke(presenter, null)!;
-            await renderTask;
-
-            Assert.That(_view.RenderedNodeCount, Is.GreaterThanOrEqualTo(1), "ต้องมี node อย่างน้อย 1 (clue ที่เก็บแล้ว)");
-            Assert.That(_view.RenderedEdgeCount, Is.GreaterThanOrEqualTo(1), "clue ที่มี witness ต้องมี edge");
-            Assert.That(_view.ContainerForTests.GetComponentInParent<Canvas>(true), Is.Not.Null,
-                "graph container ต้องอยู่ใต้ Canvas (panel เริ่ม inactive — ต้อง includeInactive)");
-
-            // ---- ตรวจ radial layout จาก RectTransform จริง ----
-            // (แยก clue/npc ด้วย sizeDelta — clue=110, npc=80; ทดสอบ asmdef ไม่อ้าง TMPro)
-            var clueNodes = new List<RectTransform>();
-            var npcNodes = new List<RectTransform>();
-            foreach (Transform child in _view.ContainerForTests)
-            {
-                if (!child.name.StartsWith("ClueNode_")) continue;
-                if (IsNpcNode(child)) npcNodes.Add((RectTransform)child);
-                else clueNodes.Add((RectTransform)child);
-            }
-
-            var innerDistances = clueNodes.Select(c => c.anchoredPosition.magnitude).ToList();
-            var outerDistances = npcNodes.Select(c => c.anchoredPosition.magnitude).ToList();
-            log.AppendLine($"[B] clue nodes (inner): {clueNodes.Count} @ r≈{string.Join(",", innerDistances.Select(d => d.ToString("F0")))}");
-            log.AppendLine($"[B] npc nodes (outer): {npcNodes.Count} @ r≈{string.Join(",", outerDistances.Select(d => d.ToString("F0")))}");
-            log.AppendLine($"[B] edges rendered: {_view.RenderedEdgeCount}");
-
-            foreach (var d in innerDistances)
-                Assert.That(d, Is.EqualTo(150f).Within(1f), "clue nodes ต้องอยู่วงใน radius 150");
-            foreach (var d in outerDistances)
-                Assert.That(d, Is.EqualTo(300f).Within(1f), "npc nodes ต้องอยู่วงนอก radius 300");
-
-            // นับ edge GameObject จริง
-            var edgeCount = 0;
-            foreach (Transform child in _view.ContainerForTests)
-                if (child.name == "ClueEdge") edgeCount++;
-            Assert.That(edgeCount, Is.EqualTo(_view.RenderedEdgeCount), "จำนวนเส้นเชื่อมต้องตรงจำนวน edge");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("B_View_RadialLayout_InnerClues_OuterNpcs_WithEdges", log.ToString());
-            await UniTask.Yield();
-        });
-
-        static bool IsNpcNode(Transform node)
-        {
-            // npc node ขนาดเล็กกว่า (80 กว่า 110) — ใช้ sizeDelta เป็น discriminator
-            var rt = (RectTransform)node;
-            return rt.sizeDelta.x < 100f;
-        }
-
-        // ---------- Test C: reactivity ----------
-
-        [UnityTest]
-        public IEnumerator C_View_Rerenders_OnClueGeneratedMessage() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test C — {DateTime.Now:HH:mm:ss} ===");
-
-            var player = _stateProvider.GetPlayer();
-            player.CurrentLocationId = "beach";
-
-            // render ครั้งแรก (state ปัจจุบัน)
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-            await InvokeRenderAsync(presenter);
-            var beforeNodes = _view.RenderedNodeCount;
-            log.AppendLine($"[C] nodes before: {beforeNodes}");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-
-            // board แสดงเฉพาะ clue ที่ "เก็บแล้ว" — เก็บ clue แรกเข้า board ก่อน
-            // (ClueGeneratedMessage ยิงตอน generate — ก่อน collect ทำให้ render รอบนั้น
-            // ยังไม่เห็น clue บน board; render ถัดไปจาก message ตัวใหม่ต้องเห็น)
-            var first = gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_c1");
-            Assert.That(first.Count, Is.GreaterThanOrEqualTo(1), "blood (100%) ต้องเกิด");
-            var inv = await investigate.InvokeAsync(new InvestigateClueRequest());
-            Assert.IsTrue(inv.Success, "ต้องเก็บ clue เข้า board ได้: " + inv.FailureReason);
-            log.AppendLine($"[C] collected clue {inv.FoundInstanceId[..Math.Min(8, inv.FoundInstanceId.Length)]}… (ยังไม่ re-render) — nodes now: {_view.RenderedNodeCount}");
-            // (ห้าม assert strict ตรงนี้ — ambient kill จาก AI อาจยิง message ระหว่างทาง)
-
-            // เกิด clue ใหม่ → ClueGeneratedMessage → presenter subscribe แล้ว re-render เอง
-            // (render ครั้งนี้รวม clue ที่เก็บไว้แล้วด้วย → จำนวน node ต้องเพิ่ม)
-            gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_c2");
-
-            // รอ render ที่ trigger โดย message (ไม่เรียกเอง — พิสูจน์ reactivity)
-            var deadline = Time.realtimeSinceStartup + 10f;
-            while (Time.realtimeSinceStartup < deadline && _view.RenderedNodeCount <= beforeNodes)
-                await UniTask.Yield();
-
-            log.AppendLine($"[C] nodes after: {_view.RenderedNodeCount}");
-            Assert.That(_view.RenderedNodeCount, Is.GreaterThan(beforeNodes),
-                "ClueGeneratedMessage ต้อง trigger re-render ทันที (กราฟรวม clue ที่เก็บแล้ว)");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("C_View_Rerenders_OnClueGeneratedMessage", log.ToString());
-            await UniTask.Yield();
-        });
-
-        // ---------- Test D: clue node click → detail popup ----------
-
-        [UnityTest]
-        public IEnumerator D_NodeClick_ShowsDetailPopup_WithBoardFacts() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test D — {DateTime.Now:HH:mm:ss} ===");
-
-            // ---- จัดฉาก: player @ beach + NPC มีชีวิต 2 ตัว (witness) + seed 1 clue + collect ----
-            var player = _stateProvider.GetPlayer();
-            var director = _scope.Container.Resolve<NpcDirectorSystem>();
-            player.CurrentLocationId = "beach";
-            var npcIds = director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
-            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1");
-            foreach (var id in npcIds) director.MoveNpc(id, "beach");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_d");
-            var inv = await investigate.InvokeAsync(new InvestigateClueRequest());
-            Assert.IsTrue(inv.Success, "seed clue ต้องเก็บได้: " + inv.FailureReason);
-            var targetId = inv.FoundInstanceId;
-
-            // ---- render ผ่าน presenter (panel เปิด — popup ต้อง active-in-hierarchy จึงนับ) ----
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-            _view.gameObject.SetActive(true);
-            await InvokeRenderAsync(presenter);
-            Assert.That(_view.RenderedNodeCount, Is.GreaterThanOrEqualTo(1), "ต้องมี node ก่อนคลิก");
-
-            // ---- simulate คลิกจริงผ่าน EventSystem (ExecuteEvents — path เดียวกับเกม) ----
-            Transform nodeTransform = null;
-            foreach (Transform child in _view.ContainerForTests)
-                if (child.name == $"ClueNode_{targetId}") { nodeTransform = child; break; }
-            Assert.That(nodeTransform != null, "clue node ต้องถูก spawn ชื่อ ClueNode_<id>");
-
-            var proxy = nodeTransform.GetComponent<GraphNodeClickProxy>();
-            Assert.That(proxy != null, "clue node ต้องมี GraphNodeClickProxy");
-            ExecuteEvents.Execute(nodeTransform.gameObject, new PointerEventData(EventSystem.current),
-                ExecuteEvents.pointerClickHandler);
-
-            // popup เปิดตอน ShowDetailAsync กลับจาก board handler — poll สั้น ๆ
-            var deadline = Time.realtimeSinceStartup + 10f;
-            while (Time.realtimeSinceStartup < deadline && !_view.IsDetailVisible)
-                await UniTask.Yield();
-            Assert.That(_view.IsDetailVisible, Is.True, "คลิก clue node ต้องเปิด popup");
-            Assert.That(_view.DetailNodeIdForTests, Is.EqualTo(targetId));
-
-            // ---- popup ต้องโชว์ facts จาก ClueBoardEntry (reuse GetClueBoardHandler) ----
-            var board = await _scope.Container
-                .Resolve<IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse>>()
-                .InvokeAsync(new GetClueBoardRequest());
-            var expected = board.Entries.First(e => e.InstanceId == targetId);
-            var detailText = _view.DetailTextForTests;
-            log.AppendLine($"[D] popup text: {detailText}");
-            StringAssert.Contains(expected.DisplayName, detailText, "popup ต้องโชว์ชื่อ clue");
-            StringAssert.Contains(expected.Reliability, detailText, "popup ต้องโชว์ความน่าเชื่อถือ");
-            StringAssert.Contains(expected.LocationId, detailText, "popup ต้องโชว์สถานที่");
-            foreach (var w in expected.WitnessNpcIds)
-                StringAssert.Contains(w, detailText, $"popup ต้องโชว์พยาน {w} (ผ่าน filter แล้ว)");
-
-            // ---- toggle ปิดด้วยการคลิกซ้ำ + ทุก node (รวม npc) ต้องมี click proxy ----
-            ExecuteEvents.Execute(nodeTransform.gameObject, new PointerEventData(EventSystem.current),
-                ExecuteEvents.pointerClickHandler);
-            Assert.That(_view.IsDetailVisible, Is.False, "คลิก clue เดิมซ้ำ = ปิด popup");
-
-            var npcNodeChecked = false;
-            foreach (Transform child in _view.ContainerForTests)
-            {
-                if (!child.name.StartsWith("ClueNode_")) continue;
-                var rt = (RectTransform)child;
-                if (rt.sizeDelta.x < 100f) // npc discriminator เดียวกับ Test B
-                {
-                    npcNodeChecked = true;
-                    Assert.That(child.GetComponent<GraphNodeClickProxy>(), Is.Not.Null,
-                        "npc node ต้องรับคลิกได้ด้วย (โซน/อาลิไบ) — ไม่มี node display-only แล้ว");
-                }
-            }
-            log.AppendLine($"[D] npc nodes verified clickable: {npcNodeChecked}");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("D_NodeClick_ShowsDetailPopup_WithBoardFacts", log.ToString());
-            await UniTask.Yield();
-        });
-
-        // ---------- Test E: HUD toggle button ----------
-
-        [UnityTest]
-        public IEnumerator E_HudButton_TogglesBoard_PanelStartsHidden() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test E — {DateTime.Now:HH:mm:ss} ===");
-
-            // ---- board เริ่มซ่อน (scene m_IsActive: 0) — ปิดค้างไว้ก่อนพิสูจน์ ----
-            _view.gameObject.SetActive(false);
-            _view.EnsureToggleButton(); // idempotent — ปุ่มอยู่บน Canvas (พ่อของ panel)
-
-            var button = GameObject.Find("ClueBoardToggleButton");
-            Assert.That(button != null, "ปุ่ม HUD ต้องถูกสร้างบน Canvas");
-            Assert.That(button.transform.parent == _view.transform.parent,
-                "ปุ่มต้องเป็น sibling ของ panel (บน Canvas) — ไม่งั้นถูกซ่อนพร้อม panel");
-
-            // ---- กดปุ่ม (ผ่าน Button.onClick — path เดียวกับเกม) ----
-            button.GetComponent<Button>().onClick.Invoke();
-            await UniTask.Yield();
-            Assert.That(_view.gameObject.activeSelf, Is.True, "กดปุ่มต้องเปิดกระดาน");
-
-            // ---- กดซ้ำ = ปิด + ปุ่มยังอยู่แม้กระดานซ่อน ----
-            button.GetComponent<Button>().onClick.Invoke();
-            await UniTask.Yield();
-            Assert.That(_view.gameObject.activeSelf, Is.False, "กดปุ่มซ้ำต้องปิดกระดาน");
-            Assert.That(button != null && button.activeInHierarchy, Is.True, "ปุ่มต้องยัง active แม้กระดานซ่อน");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("E_HudButton_TogglesBoard_PanelStartsHidden", log.ToString());
-            await UniTask.Yield();
-        });
-
-        // ---------- Test G: pin multiple nodes → side-by-side comparison cards ----------
-
-        [UnityTest]
-        public IEnumerator G_PinMultipleNodes_ShowsSideBySideCards_WithCapAndClose() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test G — {DateTime.Now:HH:mm:ss} ===");
-
-            // ---- จัดฉาก: player + 2 NPC มีชีวิต @ beach + seed/collect 2 clue (→ 4 nodes) ----
-            var player = _stateProvider.GetPlayer();
-            var director = _scope.Container.Resolve<NpcDirectorSystem>();
-            player.CurrentLocationId = "beach";
-            var npcIds = director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
-            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1");
-            foreach (var id in npcIds) director.MoveNpc(id, "beach");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            for (var i = 0; i < 3 && player.CollectedClueInstanceIds.Count < 2; i++)
-            {
-                gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_g" + i);
-                await investigate.InvokeAsync(new InvestigateClueRequest());
-            }
-            Assert.That(player.CollectedClueInstanceIds.Count, Is.GreaterThanOrEqualTo(2),
-                "ต้องมี clue บน board อย่างน้อย 2 (จะ pin เทียบหลายตัว)");
-
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-            _view.gameObject.SetActive(true);
-            await InvokeRenderAsync(presenter);
-
-            // ---- เก็บ node ทั้งหมด (clue ก่อน แล้ว npc — ตามลำดับ spawn) ----
-            var clueIds = new List<string>();
-            var npcNodeIds = new List<string>();
-            var nodeTransforms = new Dictionary<string, Transform>();
-            foreach (Transform child in _view.ContainerForTests)
-            {
-                if (!child.name.StartsWith("ClueNode_")) continue;
-                var id = child.name["ClueNode_".Length..];
-                nodeTransforms[id] = child;
-                if (((RectTransform)child).sizeDelta.x >= 100f) clueIds.Add(id);
-                else npcNodeIds.Add(id);
-            }
-            Assert.That(clueIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี clue node อย่างน้อย 1");
-            Assert.That(npcNodeIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี npc node อย่างน้อย 1 (มี edge)");
-
-            // ---- pin ตามลำดับผ่าน popup (คลิก node → ปุ่ม [ปักหมุด] — path เดียวกับเกม) ----
-            var expected = 0;
-            var pinOrder = new List<string>();
-            async UniTask PinViaPopup(string nodeId)
-            {
-                ExecuteEvents.Execute(nodeTransforms[nodeId].gameObject,
-                    new PointerEventData(EventSystem.current), ExecuteEvents.pointerClickHandler);
-                var dl = Time.realtimeSinceStartup + 10f;
-                while (Time.realtimeSinceStartup < dl && _view.DetailNodeIdForTests != nodeId) await UniTask.Yield();
-                Assert.That(_view.DetailNodeIdForTests, Is.EqualTo(nodeId), "คลิก node ต้องสลับ popup ก่อนกด pin");
-                Assert.That(_view.PinButtonForTests != null, "popup ต้องมีปุ่ม [ปักหมุด]");
-                _view.PinButtonForTests.onClick.Invoke();
-                expected = Mathf.Min(expected + 1, 3); // cap ฝั่ง presenter = 3
-                dl = Time.realtimeSinceStartup + 10f;
-                while (Time.realtimeSinceStartup < dl && _view.PinnedCardCountForTests != expected) await UniTask.Yield();
-                Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(expected), $"pin {nodeId} → {expected} การ์ด");
-                pinOrder.Add(nodeId);
-            }
-
-            await PinViaPopup(clueIds[0]);
-            await PinViaPopup(npcNodeIds[0]);
-            Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(2), "pin 2 → 2 การ์ด side-by-side");
-            log.AppendLine($"[G] pinned: [{string.Join(", ", pinOrder)}]");
-
-            // ---- เรียงซ้าย→ขวาตามลำดับ pin + ป้าย PinCard_<id> + badge ทอง ----
-            var pinRow = _view.ContainerForTests.parent.Find("CluePinRow");
-            Assert.That(pinRow != null, "ต้องมีแถว pin ใต้ panel");
-            var left = pinRow.Find($"PinCard_{pinOrder[0]}");
-            var right = pinRow.Find($"PinCard_{pinOrder[1]}");
-            Assert.That(left != null && right != null, "การ์ดต้องตั้งชื่อ PinCard_<nodeId>");
-            Assert.That(((RectTransform)left).anchoredPosition.x < ((RectTransform)right).anchoredPosition.x,
-                "pin ก่อนต้องอยู่ซ้าย — เรียงตามลำดับ pin");
-            Assert.That(nodeTransforms[pinOrder[0]].Find("PinBadge") != null
-                && nodeTransforms[pinOrder[1]].Find("PinBadge") != null,
-                "node ที่ pin ต้องมี badge จุดทอง");
-
-            // ---- cap: pin จนครบ 4 (ถ้า node พอ) → ตัวเก่าสุดถูกตัด, การ์ดคง 3 ----
-            var extra = clueIds.Concat(npcNodeIds).Where(id => !pinOrder.Contains(id)).ToList();
-            if (extra.Count >= 2)
-            {
-                await PinViaPopup(extra[0]);
-                var oldest = pinOrder[0];
-                await PinViaPopup(extra[1]);
-                Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(3), "cap ที่ 3 การ์ด");
-                var dl3 = Time.realtimeSinceStartup + 10f;
-                while (Time.realtimeSinceStartup < dl3 && pinRow.Find($"PinCard_{oldest}") != null) await UniTask.Yield();
-                Assert.That(pinRow.Find($"PinCard_{oldest}") == null,
-                    "pin ตัวที่ 4 → ตัวเก่าสุดต้องถูกตัดออก");
-                log.AppendLine("[G] cap test: pinned 4 → oldest dropped, cards=3");
-            }
-            else
-            {
-                log.AppendLine("[G] cap test skipped (nodes ไม่พอ)");
-            }
-
-            // ---- × บนการ์ดถอนหมุด ----
-            var beforeClose = _view.PinnedCardCountForTests;
-            string anyPinned = null;
-            foreach (Transform child in pinRow)
-                if (child.name.StartsWith("PinCard_")) { anyPinned = child.name["PinCard_".Length..]; break; }
-            Assert.That(_view.TryGetPinCardCloseForTests(anyPinned, out var closeBtn), Is.True,
-                "การ์ด pin ต้องมีปุ่ม ×");
-            closeBtn.onClick.Invoke();
-            var afterClose = beforeClose - 1;
-            var dl2 = Time.realtimeSinceStartup + 10f;
-            while (Time.realtimeSinceStartup < dl2 && _view.PinnedCardCountForTests != afterClose) await UniTask.Yield();
-            Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(afterClose), "กด × → การ์ดหาย 1");
-            log.AppendLine($"[G] close button unpins → {afterClose}");
-
-            // ---- refresh ข้าม re-render: pin ค้างไว้ — re-render ต้องวาดใหม่จาก pin list จำนวนเดิม ----
-            await InvokeRenderAsync(presenter);
-            Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(afterClose),
-                "re-render → แถว pin วาดใหม่ (ข้อมูลสด) จำนวนคงเดิม");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("G_PinMultipleNodes_ShowsSideBySideCards_WithCapAndClose", log.ToString());
-            await UniTask.Yield();
-        });
-
-        // ---------- Test F: npc witness click → zone + witnessed clues (alibi) ----------
-
-        [UnityTest]
-        public IEnumerator F_NpcNodeClick_ShowsZone_AndWitnessedClues() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test F — {DateTime.Now:HH:mm:ss} ===");
-
-            // ---- จัดฉาก: player + NPC มีชีวิต 2 ตัว @ beach, seed 1 clue + collect ----
-            var player = _stateProvider.GetPlayer();
-            var director = _scope.Container.Resolve<NpcDirectorSystem>();
-            player.CurrentLocationId = "beach";
-            var npcIds = director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
-            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1");
-            foreach (var id in npcIds) director.MoveNpc(id, "beach");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_f");
-            var inv = await investigate.InvokeAsync(new InvestigateClueRequest());
-            Assert.IsTrue(inv.Success, "seed clue ต้องเก็บได้: " + inv.FailureReason);
-
-            var boardHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse>>();
-            var board = await boardHandler.InvokeAsync(new GetClueBoardRequest());
-
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-            _view.gameObject.SetActive(true);
-            await InvokeRenderAsync(presenter);
-
-            // ---- หา npc witness node ในกราฟ (outer ring, มีชื่อใน witness list ที่ผ่าน filter) ----
-            string npcId = null;
-            Transform npcTransform = null;
-            foreach (Transform child in _view.ContainerForTests)
-            {
-                if (!child.name.StartsWith("ClueNode_")) continue;
-                var rt = (RectTransform)child;
-                if (rt.sizeDelta.x >= 100f) continue; // npc = size 80 (discriminator เดียวกับ Test B)
-                var id = child.name["ClueNode_".Length..];
-                if (board.Entries.Any(e => e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(id)))
-                {
-                    npcId = id;
-                    npcTransform = child;
-                    break;
-                }
-            }
-            Assert.That(npcId != null, "ต้องมี npc witness node ในกราฟ (clue ที่ seed ต้องมีพยาน)");
-
-            // pin โซนก่อนคลิก (กัน ambient move ระหว่าง test) — MoveNpc set location แบบ sync
-            director.MoveNpc(npcId, "beach");
-            var expectedZone = director.Npcs[npcId].CurrentLocationId;
-            var expectedClue = board.Entries.First(e => e.WitnessNpcIds.Contains(npcId));
-
-            // ---- คลิก npc node ผ่าน EventSystem (path เดียวกับเกม) ----
-            ExecuteEvents.Execute(npcTransform.gameObject, new PointerEventData(EventSystem.current),
-                ExecuteEvents.pointerClickHandler);
-
-            var deadline = Time.realtimeSinceStartup + 10f;
-            while (Time.realtimeSinceStartup < deadline && !_view.IsDetailVisible)
-                await UniTask.Yield();
-            Assert.That(_view.IsDetailVisible, Is.True, "คลิก npc node ต้องเปิด popup");
-            Assert.That(_view.DetailNodeIdForTests, Is.EqualTo(npcId));
-
-            // ---- popup ต้องโชว์ โซน (player-visible) + เบาะแสที่เป็นพยาน (อาลิไบคร่าว ๆ) ----
-            var detailText = _view.DetailTextForTests;
-            log.AppendLine($"[F] popup text: {detailText}");
-            StringAssert.Contains(npcId, detailText, "popup ต้องโชว์ id ของ npc");
-            StringAssert.Contains(expectedZone, detailText, "popup ต้องโชว์โซนปัจจุบัน (player-visible — chibi เดินอยู่จริง)");
-            StringAssert.Contains(expectedClue.LocationId, detailText,
-                "popup ต้องโชว์เบาะแสที่คนนี้เป็นพยาน (alibi — ยอมรับว่าอยู่แถวนั้นตอนนั้น)");
-
-            // ---- ground-truth leak guard: popup ห้ามมีข้อมูล killer/role หลุดมา ----
-            StringAssert.DoesNotContain("killer", detailText, "popup ห้ามมี ground truth ใด ๆ");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("F_NpcNodeClick_ShowsZone_AndWitnessedClues", log.ToString());
-            await UniTask.Yield();
-        });        // ---------- Test I: set_pinned_clue (AI pin/unpin) + dedupe ×N ใน alibi display ----------
-
-        [UnityTest]
-        public IEnumerator I_SetPinnedClue_AiSidePinning_AndDedupedAlibiDisplay() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test I — {DateTime.Now:HH:mm:ss} ===");
-            Assert.That(File.Exists(BridgeDll), "bridge ยังไม่ build: " + BridgeDll);
-
-            // ---- reset pin state + sync view (Test G/H อาจ pin ค้างไว้) ----
-            var pinState = _scope.Container.Resolve<CluePinState>();
-            pinState.Clear();
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-            _view.gameObject.SetActive(true);
-            await InvokeRenderAsync(presenter);
-            Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(0), "reset แล้ว UI ต้องไม่มีการ์ด pin");
-
-            // ---- จัดฉาก: player + NPC มีชีวิต @ beach + seed/collect หลาย clue (เจตนาให้ชื่อซ้ำ) ----
-            var player = _stateProvider.GetPlayer();
-            var director = _scope.Container.Resolve<NpcDirectorSystem>();
-            player.CurrentLocationId = "beach";
-            var npcIds = director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
-            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1");
-            foreach (var id in npcIds) director.MoveNpc(id, "beach");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            for (var i = 0; i < 4 && player.CollectedClueInstanceIds.Count < 3; i++)
-            {
-                gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_i" + i);
-                await investigate.InvokeAsync(new InvestigateClueRequest());
-            }
-
-            var boardHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetClueBoardRequest, GetClueBoardResponse>>();
-            var board = await boardHandler.InvokeAsync(new GetClueBoardRequest());
-            Assert.That(player.CollectedClueInstanceIds.Count, Is.GreaterThanOrEqualTo(2), "ต้องมี clue ≥ 2");
-
-            await InvokeRenderAsync(presenter);
-            var graphHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetClueGraphRequest, GetClueGraphResponse>>();
-            var graph = await graphHandler.InvokeAsync(new GetClueGraphRequest());
-            var clueNode = graph.Nodes.FirstOrDefault(n => n.Type == "clue");
-            var npcNode = graph.Nodes.FirstOrDefault(n => n.Type == "npc");
-            Assert.That(clueNode != null && npcNode != null, "กราฟต้องมีทั้ง clue และ npc node");
-
-            var setHandler = _scope.Container.Resolve<IAsyncRequestHandler<SetPinnedClueRequest, SetPinnedClueResponse>>();
-
-            // ---- AI pin clue → Success + state ตรง; แล้ว pin npc → 2 ----
-            var r1 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = clueNode.Id, Pinned = true });
-            Assert.That(r1.Success, Is.True, "pin clue ต้องสำเร็จ: " + r1.FailureReason);
-            Assert.That(r1.PinnedNodeIds, Is.EqualTo(new[] { clueNode.Id }));
-            var r2 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = npcNode.Id, Pinned = true });
-            Assert.That(r2.Success, Is.True);
-            Assert.That(r2.PinnedNodeIds.Count, Is.EqualTo(2), "2 pins (AI side)");
-            log.AppendLine($"[I] AI pinned: [{string.Join(", ", r2.PinnedNodeIds)}]");
-
-            // ---- idempotent: pin ซ้ำ → Success + no change; unpin ที่ไม่ได้ pin → Success + no change ----
-            var r3 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = clueNode.Id, Pinned = true });
-            Assert.That(r3.Success && r3.FailureReason == "already_pinned", Is.True,
-                "pin ซ้ำต้อง idempotent: " + r3.FailureReason);
-            Assert.That(r3.PinnedNodeIds.Count, Is.EqualTo(2), "pin ซ้ำต้องไม่เปลี่ยน state");
-            var r4 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = clueNode.Id, Pinned = false });
-            Assert.That(r4.Success && r4.FailureReason == string.Empty, Is.True, "unpin ต้องสำเร็จจริง");
-            Assert.That(r4.PinnedNodeIds.Count, Is.EqualTo(1), "unpin แล้วเหลือ 1");
-            var r4b = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = clueNode.Id, Pinned = false });
-            Assert.That(r4b.Success && r4b.FailureReason == "not_pinned", Is.True, "unpin ซ้ำต้อง idempotent");
-            log.AppendLine("[I] idempotent set semantics verified (already_pinned / not_pinned)");
-
-            // ---- validation: unknown node + empty id ----
-            var r5 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = "npc_not_in_graph", Pinned = true });
-            Assert.That(r5.Success, Is.False);
-            Assert.That(r5.FailureReason, Is.EqualTo("unknown_node"), "ต้องปัด pin node ที่ไม่อยู่ในกราฟ");
-            var r6 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = "", Pinned = true });
-            Assert.That(r6.FailureReason, Is.EqualTo("missing_node_id"));
-            log.AppendLine("[I] validation: unknown_node + missing_node_id rejected");
-
-            // ---- AI pin → UI ต้อง update ตาม (ผ่าน CluePinState.Changed subscription) ----
-            var r7 = await setHandler.InvokeAsync(new SetPinnedClueRequest { NodeId = clueNode.Id, Pinned = true });
-            Assert.That(r7.Success && r7.PinnedNodeIds.Count == 2, Is.True, "กลับไป 2 pins");
-            var dl = Time.realtimeSinceStartup + 10f;
-            while (Time.realtimeSinceStartup < dl && _view.PinnedCardCountForTests != 2) await UniTask.Yield();
-            Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(2),
-                "AI pin ผ่าน MCP handler → การ์ดบน UI ต้องวาดตาม (Changed → RefreshPinnedAsync)");
-            log.AppendLine("[I] AI-side pin reflected in UI: 2 cards");
-
-            // ---- dedupe ×N (display-only): npc pin ที่เป็นพยานเบาะแสชื่อซ้ำ ----
-            var npcWitnessed = board.Entries
-                .Where(e => e.WitnessNpcIds != null && e.WitnessNpcIds.Contains(npcNode.Id))
-                .Select(e => $"{e.DisplayName} @ {e.LocationId}").ToList();
-            var grouped = npcWitnessed.GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
-            var hasDupes = grouped.Any(kv => kv.Value > 1);
-            var pinnedHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse>>();
-            var pinnedRes = await pinnedHandler.InvokeAsync(new GetPinnedCluesRequest());
-            var rendered = ClueGraphTextFormat.RenderPinned(pinnedRes);
-            log.AppendLine("[I] RenderPinned output:");
-            log.AppendLine(rendered);
-
-            var npcLine = rendered.Split('\n').First(l => l.Contains("[npc]"));
-            var witnessedPart = npcLine.Substring(npcLine.IndexOf("witnessed: ") + "witnessed: ".Length);
-            var shownLines = witnessedPart.Split(';').Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
-            // display-only invariant: ผลรวมจำนวนจาก "×N" + บรรทัดเดี่ยว == จำนวน instance จริง
-            var totalFromDisplay = 0;
-            foreach (var s in shownLines)
-            {
-                var idx = s.LastIndexOf(" ×");
-                if (idx >= 0 && int.TryParse(s[(idx + 2)..], out var n)) totalFromDisplay += n;
-                else totalFromDisplay += 1;
-            }
-            Assert.That(totalFromDisplay, Is.EqualTo(npcWitnessed.Count),
-                "display-only: ผลรวม ×N ต้องเท่ากับจำนวนเบาะแสจริง (ข้อมูลไม่หาย)");
-            Assert.That(shownLines.Count, Is.LessThanOrEqualTo(npcWitnessed.Count));
-            if (hasDupes)
-            {
-                Assert.That(witnessedPart, Does.Contain(" ×"), "มีเบาะแสชื่อซ้ำ → ต้องแสดงรูป ×N");
-                Assert.That(shownLines.Count, Is.LessThan(npcWitnessed.Count), "dedupe ต้องลดจำนวนบรรทัดลง");
-                log.AppendLine($"[I] dedupe: {npcWitnessed.Count} raw → {shownLines.Count} displayed (×N form)");
-            }
-            else
-            {
-                log.AppendLine("[I] dedupe precondition (ชื่อซ้ำ) ไม่เกิดรอบนี้ — invariant ผลรวมยังตรง");
-            }
-            StringAssert.DoesNotContain("killer", rendered, "ห้ามมี ground truth หลุด");
-
-            // ---- bridge round-trip: set_pinned_clue ผ่าน stdio MCP (tool ใหม่มีจริง + args ถูกส่ง) ----
-            pinState.Clear();
-            await InvokeRenderAsync(presenter);
-            string result = null;
-            Exception convError = null;
-            await UniTask.Run(() =>
-            {
-                try { result = RunBridgeConversation(log, "set_pinned_clue", new { nodeId = clueNode.Id, pinned = true }); }
-                catch (Exception ex) { convError = ex; }
-            });
-            if (convError != null) throw convError;
-            Assert.IsFalse(result.Contains("\"isError\":true"), "tools/call ต้องไม่ error: " + result);
-            var text = ExtractToolText(result);
-            log.AppendLine("[I] set_pinned_clue bridge output:");
-            log.AppendLine(text);
-            StringAssert.Contains("Pinned", text, "ต้องยืนยันการ pin");
-            StringAssert.Contains(clueNode.Id, text, "ต้องระบุ node ที่ pin");
-            StringAssert.Contains("Current pins", text, "response ต้องแนบ pin list ล่าสุด");
-            Assert.That(pinState.IsPinned(clueNode.Id), Is.True,
-                "bridge pin → CluePinState ต้องเปลี่ยนจริง (state เดียวกับ UI)");
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("I_SetPinnedClue_AiSidePinning_AndDedupedAlibiDisplay", log.ToString());
-            await UniTask.Yield();
-        });
-
-        static async UniTask InvokeRenderAsync(ClueBoardPresenter presenter)
-        {
-            var task = (UniTask)typeof(ClueBoardPresenter)
-                .GetMethod("RenderAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                !.Invoke(presenter, null)!;
-            await task;
-        }
-
-        // ---------- Test H: pin state → get_pinned_clues (MCP) + pins survive close/reopen ----------
-
-        [UnityTest]
-        public IEnumerator H_PinState_ExposedToMcp_AndSurvivesBoardReopen() => UniTask.ToCoroutine(async () =>
-        {
-            var log = new StringBuilder();
-            log.AppendLine($"=== Clue System v2 (e) Test H — {DateTime.Now:HH:mm:ss} ===");
-            Assert.That(File.Exists(BridgeDll), "bridge ยังไม่ build: " + BridgeDll);
-
-            // ---- reset pin state (test isolation — Test G อาจ pin ค้างไว้) ----
-            var pinState = _scope.Container.Resolve<CluePinState>();
-            pinState.Clear();
-            var presenter = _scope.Container.Resolve<ClueBoardPresenter>();
-
-            // ---- จัดฉาก: player + NPC มีชีวิต @ beach + seed/collect 2 clue (→ clue + npc nodes) ----
-            var player = _stateProvider.GetPlayer();
-            var director = _scope.Container.Resolve<NpcDirectorSystem>();
-            player.CurrentLocationId = "beach";
-            var npcIds = director.Npcs.Values.Where(n => n.IsAlive).Select(n => n.Id).Take(2).ToList();
-            Assert.That(npcIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี NPC มีชีวิตอย่างน้อย 1");
-            foreach (var id in npcIds) director.MoveNpc(id, "beach");
-
-            var gen = _scope.Container.Resolve<ClueGenerationSystem>();
-            var investigate = _scope.Container.Resolve<IAsyncRequestHandler<InvestigateClueRequest, InvestigateClueResponse>>();
-            for (var i = 0; i < 3 && player.CollectedClueInstanceIds.Count < 2; i++)
-            {
-                gen.TryGenerate(ClueTriggerSource.KillSabotage, "beach", "npc_test_killer_h" + i);
-                await investigate.InvokeAsync(new InvestigateClueRequest());
-            }
-            Assert.That(player.CollectedClueInstanceIds.Count, Is.GreaterThanOrEqualTo(2),
-                "ต้องมี clue บน board อย่างน้อย 2");
-
-            _view.gameObject.SetActive(true);
-            await InvokeRenderAsync(presenter);
-
-            // ---- pin clue + npc ผ่าน popup (path เดียวกับเกม — เหมือน Test G) ----
-            var clueIds = new List<string>();
-            var npcNodeIds = new List<string>();
-            var nodeTransforms = new Dictionary<string, Transform>();
-            foreach (Transform child in _view.ContainerForTests)
-            {
-                if (!child.name.StartsWith("ClueNode_")) continue;
-                var id = child.name["ClueNode_".Length..];
-                nodeTransforms[id] = child;
-                if (((RectTransform)child).sizeDelta.x >= 100f) clueIds.Add(id);
-                else npcNodeIds.Add(id);
-            }
-            Assert.That(clueIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี clue node");
-            Assert.That(npcNodeIds.Count, Is.GreaterThanOrEqualTo(1), "ต้องมี npc node");
-
-            async UniTask PinViaPopup(string nodeId)
-            {
-                ExecuteEvents.Execute(nodeTransforms[nodeId].gameObject,
-                    new PointerEventData(EventSystem.current), ExecuteEvents.pointerClickHandler);
-                var dl = Time.realtimeSinceStartup + 10f;
-                while (Time.realtimeSinceStartup < dl && _view.DetailNodeIdForTests != nodeId) await UniTask.Yield();
-                Assert.That(_view.DetailNodeIdForTests, Is.EqualTo(nodeId), "คลิก node ต้องเปิด popup ก่อน pin");
-                _view.PinButtonForTests.onClick.Invoke();
-                dl = Time.realtimeSinceStartup + 10f;
-                while (Time.realtimeSinceStartup < dl && _view.PinnedCardCountForTests != pinState.PinnedNodeIds.Count)
-                    await UniTask.Yield();
-                Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(pinState.PinnedNodeIds.Count),
-                    $"pin {nodeId} → UI ต้องตรงกับ CluePinState");
-            }
-
-            await PinViaPopup(clueIds[0]);
-            await PinViaPopup(npcNodeIds[0]);
-            Assert.That(pinState.PinnedNodeIds.Count, Is.EqualTo(2), "pin แล้วต้องมี 2");
-            var expectedClueId = pinState.PinnedNodeIds[0];
-            var expectedNpcId = pinState.PinnedNodeIds[1];
-            log.AppendLine($"[H] pinned: [{string.Join(", ", pinState.PinnedNodeIds)}]");
-
-            // ---- MCP chain ใน-process: GetPinnedCluesHandler อ่าน state เดียวกับ UI ----
-            var pinnedHandler = _scope.Container.Resolve<IAsyncRequestHandler<GetPinnedCluesRequest, GetPinnedCluesResponse>>();
-            var pinnedRes = await pinnedHandler.InvokeAsync(new GetPinnedCluesRequest());
-            Assert.That(pinnedRes.Pinned.Count, Is.EqualTo(2), "handler ต้องเห็น pin ทั้ง 2 (state เดียวกับ UI)");
-            Assert.That(pinnedRes.Pinned[0].NodeId, Is.EqualTo(expectedClueId), "ลำดับ pin (เก่าสุดก่อน)");
-            Assert.That(pinnedRes.Pinned[0].Type, Is.EqualTo("clue"), "pin แรก = clue");
-            Assert.That(pinnedRes.Pinned[0].DisplayName, Is.Not.Empty, "clue pin ต้องมี DisplayName");
-            Assert.That(pinnedRes.Pinned[0].Reliability, Is.Not.Empty, "clue pin ต้องมี Reliability (ผ่าน board handler เดิม)");
-            Assert.That(pinnedRes.Pinned[1].Type, Is.EqualTo("npc"), "pin ที่สอง = npc");
-            Assert.That(pinnedRes.Pinned[1].Zone, Is.EqualTo("beach"), "npc pin ต้องโชว์โซนที่ MoveNpc ตั้งไว้");
-            Assert.That(pinnedRes.Pinned[1].WitnessedClues.Count, Is.GreaterThanOrEqualTo(1),
-                "npc pin ต้องมีอาลิไบ (เบาะแสที่เป็นพยาน)");
-            var humanReadable = ClueGraphTextFormat.RenderPinned(pinnedRes);
-            log.AppendLine("[H] RenderPinned output:");
-            log.AppendLine(humanReadable);
-            StringAssert.Contains("Pinned Clues", humanReadable, "ต้องมี header");
-            StringAssert.Contains("[clue]", humanReadable);
-            StringAssert.Contains("[npc]", humanReadable);
-            StringAssert.DoesNotContain("killer", humanReadable, "ห้ามมี ground truth หลุด");
-
-            // ---- single-node query (presenter reuse path): ใส่ NodeId = node เดียว ----
-            var single = await pinnedHandler.InvokeAsync(new GetPinnedCluesRequest { NodeId = expectedClueId });
-            Assert.That(single.Pinned.Count, Is.EqualTo(1), "query เจาะจง id ต้องได้ 1 รายการ");
-            Assert.That(single.Pinned[0].NodeId, Is.EqualTo(expectedClueId));
-
-            // ---- pins survive board close/reopen (same session) ----
-            _view.gameObject.SetActive(false); // ปิดกระดาน (เหมือน Tab toggle close)
-            await UniTask.Yield();
-            Assert.That(pinState.PinnedNodeIds.Count, Is.EqualTo(2), "ปิดกระดานแล้ว pin ต้องค้าง (state ฝั่ง presenter/singleton)");
-            _view.gameObject.SetActive(true); // เปิดใหม่
-            await InvokeRenderAsync(presenter); // TogglePanel เรียก RenderAsync ตอนเปิด — เรียกตรงเพื่อ await
-            Assert.That(_view.PinnedCardCountForTests, Is.EqualTo(2),
-                "เปิดกระดานใหม่ → แถว pin ต้องวาดครบ 2 การ์ดจาก pin list เดิม");
-            log.AppendLine("[H] pins survived close/reopen: 2 cards redrawn from CluePinState");
-
-            // ---- bridge round-trip: get_pinned_clues ผ่าน stdio MCP (tool ใหม่มีจริงบน bridge) ----
-            string result = null;
-            Exception convError = null;
-            await UniTask.Run(() =>
-            {
-                try { result = RunBridgeConversation(log, "get_pinned_clues"); }
-                catch (Exception ex) { convError = ex; }
-            });
-            if (convError != null) throw convError;
-            Assert.IsFalse(result.Contains("\"isError\":true"), "tools/call ต้องไม่ error: " + result);
-            var text = ExtractToolText(result);
-            log.AppendLine("[H] get_pinned_clues bridge output:");
-            log.AppendLine(text);
-            StringAssert.Contains("Pinned Clues", text, "bridge ต้องเห็น pin เดียวกัน (state singleton ร่วม)");
-            StringAssert.Contains("[clue]", text);
-            StringAssert.Contains("[npc]", text);
-
-            log.AppendLine("RESULT: PASS");
-            WriteEvidence("H_PinState_ExposedToMcp_AndSurvivesBoardReopen", log.ToString());
-            await UniTask.Yield();
-        });
-
-        // ---- helpers ----
-
         static string MiniSerialize(object obj)
         {
             switch (obj)
             {
                 case null: return "null";
                 case string s: return $"\"{s}\"";
-                case bool b: return b ? "true" : "false"; // JSON lowercase — bool.ToString() ให้ True/False ซึ่งไม่ใช่ JSON
+                case bool b: return b ? "true" : "false"; // JSON lowercase
                 case int i: return i.ToString();
                 default:
                     var sb = new StringBuilder("{");

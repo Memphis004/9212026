@@ -1,0 +1,17 @@
+=== Clue System v2 (f) Test F — 16:07:10 ===
+[F] clue node tooltip:
+คราบเลือด ×1
+ความน่าเชื่อถือ: Strong
+พบที่: beach
+พยาน (จากที่ pin):
+npc_01
+[F] npc card tooltip:
+npc_01
+โซน: beach
+เป็นพยาน:
+คราบเลือด @ beach ×11
+รอยขีดข่วน @ beach
+คราบเลือด @ cave
+[F] npc dedupe: 13 raw → 3 displayed (×N invariant ✓)
+RESULT: PASS
+

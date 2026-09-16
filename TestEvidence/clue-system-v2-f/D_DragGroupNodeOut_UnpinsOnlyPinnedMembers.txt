@@ -1,0 +1,6 @@
+=== Clue System v2 (f) Test D — 16:06:59 ===
+[D] before unpin: pinned = 10, group pos = (0.00, 0.00)
+[D] group node present via M(G) from pinned npc (intended)
+[D] after unpin: pinned = [npc_01] (npc ค้าง)
+RESULT: PASS
+

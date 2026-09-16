@@ -1,0 +1,8 @@
+=== Clue System v2 (f) Test A — 16:06:59 ===
+[A] card 'LibCard_group:คราบเลือด' group instances = 1
+[A] pinned after drop: [test_blood_stain_a_fbbdc7fda57a4ae7823db1f3281918f8]
+[A] nodes=3 edges=2
+Pinned Clues — 1 node(s) pinned (oldest first):
+  [clue] คราบเลือด (Strong) @ beach — seen near: npc_01, npc_02
+RESULT: PASS
+

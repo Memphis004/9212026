@@ -1,0 +1,10 @@
+=== Clue System v2 (f) Test I — 16:07:10 ===
+[I] get_clue_graph text (ย่อ):
+Clue Graph \u2014 16 clue(s), 27 witness link(s):\r
+  \u0E04\u0E23\u0E32\u0E1A\u0E40\u0E25\u0E37\u0E2D\u0E14 \u2014 seen near: npc_01, npc_02\r
+  \u0E04\u0E23\u0E32\u0E1A\u0E40\u0E25\u0E37\u0E2D\u0E14 \u2014 seen near: npc_01, npc_02\r …
+[I] get_clue_board text ✓
+[I] no click/popup/pin-row remnants ✓ (GraphNodeClickProxy → GraphNodeDragProxy)
+[I] npc portraits not gray ✓
+RESULT: PASS
+

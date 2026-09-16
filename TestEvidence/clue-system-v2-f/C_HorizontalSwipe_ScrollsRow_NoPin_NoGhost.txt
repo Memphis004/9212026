@@ -1,0 +1,5 @@
+=== Clue System v2 (f) Test C — 16:06:59 ===
+[C] content.x before=0.0 after=-995.0
+[C] no pin, no ghost — arbitration ✓
+RESULT: PASS
+

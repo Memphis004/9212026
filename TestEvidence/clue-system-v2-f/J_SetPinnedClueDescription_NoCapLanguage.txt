@@ -1,0 +1,6 @@
+=== Clue System v2 (f) Test J — 16:07:11 ===
+[J] SetPinnedClue description:
+Pin or unpin a clue-board node (clue instance id or witness NPC id from get_clue_graph) on the player's clue board. The board is a drag-drop workspace: the player (or you) pins nodes into a graph area and drags them out to unpin. No cap on how many nodes can be pinned. Idempotent set semantics -- safe to retry. Response always includes the current pin list (use it to update your model without another call). Same state the player sees in-game; the graph re-renders immediately on change.
+[J] GetPinnedClues description ✓ (workspace semantics, no cap)
+RESULT: PASS
+
